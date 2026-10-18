@@ -539,20 +539,22 @@ function render_(template, name, link, vcode) {
 
 function sendMail_(to, subject, text) {
   var from = Session.getEffectiveUser().getEmail();
+  var body = Utilities.base64Encode(text, Utilities.Charset.UTF_8).replace(/.{76}/g, "$&\r\n");
   var mime = [
     "From: Supernova <" + from + ">",
     "To: " + to,
     "Subject: =?UTF-8?B?" + Utilities.base64Encode(subject, Utilities.Charset.UTF_8) + "?=",
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
     "",
-    text,
+    body,
   ].join("\r\n");
   var response = UrlFetchApp.fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "post",
     contentType: "application/json",
     headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    payload: JSON.stringify({ raw: Utilities.base64EncodeWebSafe(mime) }),
+    payload: JSON.stringify({ raw: Utilities.base64EncodeWebSafe(mime, Utilities.Charset.UTF_8) }),
     muteHttpExceptions: true,
   });
   var code = response.getResponseCode();
