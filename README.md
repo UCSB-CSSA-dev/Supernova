@@ -63,4 +63,4 @@ The site is a project page, so the public path is `/polling-app`.
 
 Do not put the admin password, spreadsheet contents, or any Google credential in the repository. Those stay in Apps Script properties.
 
-The results screen polls every 5 seconds. Apps Script caches that response for 4 seconds and drops the cache when a vote is saved. Leaving `/results` open all day can use up the consumer Apps Script runtime quota (about 90 minutes per day), so open it for the show.
+The results screen asks Google for new counts once a second, waiting for each answer before asking again, and the status light flashes green on every successful sync. Apps Script caches the counts for 1 second and drops the cache when a vote is saved. Each round trip to Apps Script usually takes about a second, so expect updates every 1–2 seconds. Open `/results` for the show rather than leaving it running all day.

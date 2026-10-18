@@ -314,7 +314,7 @@ function results_() {
     }),
     updatedAt: new Date().toISOString(),
   };
-  cache.put("results", JSON.stringify(payload), 4);
+  cache.put("results", JSON.stringify(payload), 1);
   return payload;
 }
 

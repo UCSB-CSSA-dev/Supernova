@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { AdSlot } from "@/components/ad-slot";
 import { castVote, fetchVoteState } from "@/lib/backend";
 import type { Choice } from "@/lib/ranking";
 
@@ -177,6 +178,7 @@ export function VoteScreen({ code }: { code: string }) {
               You are voting for {selectedChoice?.singerName} — {selectedChoice?.songName}. You can&apos;t change this.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <AdSlot />
           {submitError ? <p className="text-sm text-destructive">{submitError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={submitting}>Go back</AlertDialogCancel>

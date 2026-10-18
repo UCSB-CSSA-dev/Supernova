@@ -117,6 +117,149 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+.sn-aurora {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.5;
+  animation: sn-drift 18s ease-in-out infinite;
+}
+
+.sn-aurora-a {
+  top: -25vw;
+  left: -15vw;
+  width: 55vw;
+  height: 55vw;
+  background: oklch(0.45 0.2 295);
+}
+
+.sn-aurora-b {
+  top: 8vh;
+  right: -14vw;
+  width: 45vw;
+  height: 45vw;
+  background: oklch(0.6 0.16 65 / 0.6);
+  animation-duration: 23s;
+  animation-direction: reverse;
+}
+
+.sn-aurora-c {
+  bottom: -28vw;
+  left: 25vw;
+  width: 50vw;
+  height: 42vw;
+  background: oklch(0.42 0.17 255);
+  animation-duration: 27s;
+}
+
+.sn-stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1.5px 1.5px at 8% 18%, white, transparent),
+    radial-gradient(1px 1px at 22% 72%, white, transparent),
+    radial-gradient(2px 2px at 37% 34%, oklch(0.95 0.08 85), transparent),
+    radial-gradient(1px 1px at 51% 12%, white, transparent),
+    radial-gradient(1.5px 1.5px at 64% 58%, white, transparent),
+    radial-gradient(1px 1px at 78% 26%, white, transparent),
+    radial-gradient(2px 2px at 91% 81%, oklch(0.9 0.08 300), transparent),
+    radial-gradient(1px 1px at 14% 46%, white, transparent),
+    radial-gradient(1.5px 1.5px at 85% 44%, white, transparent);
+  animation: sn-twinkle 3.5s ease-in-out infinite alternate;
+}
+
+.sn-stars-slow {
+  transform: rotate(180deg) scale(1.2);
+  animation-duration: 5.5s;
+  animation-delay: -2s;
+}
+
+.sn-title {
+  background: linear-gradient(90deg, oklch(0.88 0.14 85), white, oklch(0.8 0.14 300), oklch(0.88 0.14 85));
+  background-size: 300% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: sn-title 9s linear infinite;
+}
+
+.sn-bar {
+  overflow: hidden;
+}
+
+.sn-bar::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(to top, transparent, rgb(255 255 255 / 0.45), transparent) no-repeat;
+  background-size: 100% 35%;
+  mix-blend-mode: overlay;
+  animation: sn-shimmer 3.2s ease-in-out infinite;
+}
+
+.sn-pulse {
+  background: radial-gradient(circle at 50% 0%, rgb(255 255 255 / 0.55), transparent 60%);
+  animation: sn-glow 1.8s ease-in-out infinite;
+}
+
+.sn-sweep {
+  background: linear-gradient(100deg, transparent 35%, oklch(0.95 0.1 85 / 0.22) 50%, transparent 65%);
+  mix-blend-mode: screen;
+}
+
+@keyframes sn-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6vw, -4vh, 0) scale(1.15);
+  }
+}
+
+@keyframes sn-twinkle {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 0.85;
+  }
+}
+
+@keyframes sn-title {
+  to {
+    background-position: 300% 0;
+  }
+}
+
+@keyframes sn-shimmer {
+  from {
+    background-position: 0 160%;
+  }
+  to {
+    background-position: 0 -60%;
+  }
+}
+
+@keyframes sn-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sn-aurora,
+  .sn-stars,
+  .sn-title,
+  .sn-bar::after,
+  .sn-pulse {
+    animation: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
