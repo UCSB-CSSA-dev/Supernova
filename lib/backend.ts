@@ -22,14 +22,23 @@ function endpoint(): string {
 
 type Payload = Record<string, unknown> & { ok?: boolean; error?: string; unauthenticated?: boolean };
 
-async function call<T>(payload: Record<string, unknown>): Promise<T> {
-  const response = await fetch(endpoint(), {
-    method: "POST",
-    redirect: "follow",
-    cache: "no-store",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload),
-  });
+async function call<T>(payload: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(endpoint(), {
+      method: "POST",
+      redirect: "follow",
+      cache: "no-store",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new BackendError("Google took too long to answer.");
+    }
+    throw error;
+  }
   const text = await response.text();
   let body: Payload;
   try {
@@ -58,8 +67,9 @@ export function clearAdminToken(): void {
   window.sessionStorage.removeItem(TOKEN_KEY);
 }
 
+// The results board waits for each answer before asking again, so a stalled request must not hang forever.
 export function fetchResults(): Promise<PublicResults> {
-  return call<PublicResults>({ action: "results" });
+  return call<PublicResults>({ action: "results" }, 15000);
 }
 
 export function fetchVoteState(code: string): Promise<VoteState & { ok?: boolean; error?: string }> {

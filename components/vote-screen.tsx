@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { AdSlot } from "@/components/ad-slot";
+import { CircleCheck, TriangleAlert } from "lucide-react";
+import { AdPoster, AdSlot } from "@/components/ad-slot";
 import { castVote, fetchVoteState } from "@/lib/backend";
 import type { Choice } from "@/lib/ranking";
 
@@ -97,6 +98,27 @@ export function VoteScreen({ code }: { code: string }) {
     }
   }
 
+  if (state.status === "used") {
+    return (
+      <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 py-4">
+        <header
+          className="flex items-center gap-3 rounded-xl bg-card px-4 py-3 ring-1 ring-foreground/10"
+          aria-live="polite"
+        >
+          <CircleCheck className="size-5 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <p className="text-[11px] tracking-[0.3em] text-primary uppercase">Supernova · Vote recorded</p>
+            <p className="truncate text-sm">
+              <span className="font-medium">{state.singerName}</span>
+              <span className="text-muted-foreground"> · {state.songName}</span>
+            </p>
+          </div>
+        </header>
+        <AdPoster className="mt-4" />
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 py-8">
       <p className="text-sm tracking-[0.35em] text-primary uppercase">Supernova</p>
@@ -108,15 +130,6 @@ export function VoteScreen({ code }: { code: string }) {
 
       {state.status === "invalid" ? (
         <p className="mt-8 text-lg">This voting link is not valid.</p>
-      ) : null}
-
-      {state.status === "used" ? (
-        <section className="mt-8 rounded-xl bg-card p-5 ring-1 ring-foreground/10" aria-live="polite">
-          <p className="text-sm tracking-wide text-primary uppercase">Vote recorded</p>
-          <h2 className="mt-2 font-heading text-3xl">{state.singerName}</h2>
-          <p className="mt-1 text-muted-foreground">{state.songName}</p>
-          <p className="mt-4 text-sm">This vote can&apos;t be changed.</p>
-        </section>
       ) : null}
 
       {state.status === "open" ? (
@@ -175,12 +188,20 @@ export function VoteScreen({ code }: { code: string }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Submit this vote?</AlertDialogTitle>
             <AlertDialogDescription>
-              You are voting for {selectedChoice?.singerName} — {selectedChoice?.songName}. You can&apos;t change this.
+              You are voting for {selectedChoice?.singerName} — {selectedChoice?.songName}.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AdSlot />
           {submitError ? <p className="text-sm text-destructive">{submitError}</p> : null}
-          <AlertDialogFooter>
+          <AlertDialogFooter className="sm:flex-wrap">
+            {/* First in the DOM so the footer's mobile flex-col-reverse puts it at the bottom. */}
+            <p
+              role="note"
+              className="flex items-center justify-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-300 ring-1 ring-amber-400/30 sm:order-last sm:basis-full"
+            >
+              <TriangleAlert className="size-4 shrink-0" aria-hidden />
+              Your vote option CANNOT be changed after submitting!
+            </p>
             <AlertDialogCancel disabled={submitting}>Go back</AlertDialogCancel>
             <AlertDialogAction disabled={submitting} onClick={() => void submitVote()}>
               {submitting ? "Submitting…" : "Submit vote"}

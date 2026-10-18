@@ -91,6 +91,7 @@ export function ResultsBoard() {
       }
     }
 
+    // The next request is scheduled only after this one settles, so syncs never overlap.
     async function sync() {
       const started = Date.now();
       try {
