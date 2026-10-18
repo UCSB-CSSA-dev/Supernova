@@ -33,7 +33,7 @@ The dedicated account must be able to edit Audience and Results. Singers can be 
 
 Create three files on the same Google account:
 
-- **Audience** with columns `Name` and `Email`. The script adds `verification_code` and `email_sent_at`.
+- **Audience** with columns `Name` and `Email`. The script adds `verification_code` (6 characters, for the backup Google Form), `verification_hash` (used in the voting link), and `email_sent_at`.
 - **Singers** with columns `singer_name` and `song_name`.
 - **Results** can start empty. The script writes `voted_at`, `name`, `email`, `verification_code`, `singer_name`, `song_name`.
 
@@ -49,7 +49,9 @@ Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_APPS_SCRIPT_URL` to the
 npm run dev
 ```
 
-Open `/admin`, generate codes, preview the message, send a test to the script account, then send the audience. `[Name]` and `[link]` are replaced per person.
+Open `/admin`, generate codes, preview the message, send a test to the script account, then send the audience. `[Name]`, `[link]`, and `[vcode]` are replaced per person. **Resend to all** emails everyone with a code again; if Gmail stops it partway, resume it from the same page.
+
+The link hash is an HMAC of the code keyed by the `HASH_SECRET` script property, which the script creates the first time it generates codes. Do not change or delete it after links are sent.
 
 ## 3. GitHub Pages
 

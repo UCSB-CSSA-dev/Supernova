@@ -34,8 +34,12 @@ export type AdminStatus = {
   codesMissing: number;
   unsent: number;
   invalidEmails: { row: number; name: string; email: string }[];
-  preview: { name: string; link: string } | null;
+  reachable: number;
+  resend: { since: string; remaining: number } | null;
+  preview: { name: string; link: string; vcode: string } | null;
 };
+
+export type SendMode = "unsent" | "all";
 
 export type SendFailure = {
   row: number;

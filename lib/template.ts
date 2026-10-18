@@ -6,13 +6,18 @@ You're invited to vote for the best singer in Supernova. Your personal voting li
 
 [link]
 
-You can vote once, and your vote can't be changed.`;
+You can vote once, and your vote can't be changed.
+
+If the voting page is down during the show, use this verification code on the backup form: [vcode]`;
 
 export function renderTemplate(
   template: string,
-  values: { name: string; link: string },
+  values: { name: string; link: string; vcode: string },
 ): string {
-  return template.replaceAll("[Name]", values.name).replaceAll("[link]", values.link);
+  return template
+    .replaceAll("[Name]", values.name)
+    .replaceAll("[link]", values.link)
+    .replaceAll("[vcode]", values.vcode);
 }
 
 export function draftError(subject: string, body: string): string | null {

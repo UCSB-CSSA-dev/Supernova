@@ -1,4 +1,4 @@
-import type { AdminStatus, PublicResults, SendBatchResult, VoteState } from "@/lib/types";
+import type { AdminStatus, PublicResults, SendBatchResult, SendMode, VoteState } from "@/lib/types";
 
 const TOKEN_KEY = "supernova-admin-token";
 
@@ -100,6 +100,19 @@ export function sendTestEmail(subject: string, message: string): Promise<{ ok: b
   return call({ action: "testEmail", token: adminToken(), subject, message });
 }
 
-export function sendBatch(subject: string, message: string, skipRows: number[]): Promise<SendBatchResult> {
-  return call({ action: "send", token: adminToken(), subject, message, skipRows });
+export function sendBatch(
+  subject: string,
+  message: string,
+  skipRows: number[],
+  mode: SendMode,
+): Promise<SendBatchResult> {
+  return call({ action: "send", token: adminToken(), subject, message, skipRows, mode });
+}
+
+export function startResend(): Promise<{ total: number }> {
+  return call({ action: "resendStart", token: adminToken() });
+}
+
+export function cancelResend(): Promise<{ ok: boolean }> {
+  return call({ action: "resendCancel", token: adminToken() });
 }

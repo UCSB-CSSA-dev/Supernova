@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { draftError, renderTemplate, textToHtml } from "./template.ts";
 
-test("replaces name and link placeholders", () => {
+test("replaces name, link, and code placeholders", () => {
   assert.equal(
-    renderTemplate("Hi [Name], vote at [link]. Thanks, [Name].", {
+    renderTemplate("Hi [Name], vote at [link]. Backup code [vcode]. Thanks, [Name].", {
       name: "Mina",
-      link: "https://show.example/vote/abc",
+      link: "https://show.example/vote?code=abc",
+      vcode: "K7P3QX",
     }),
-    "Hi Mina, vote at https://show.example/vote/abc. Thanks, Mina.",
+    "Hi Mina, vote at https://show.example/vote?code=abc. Backup code K7P3QX. Thanks, Mina.",
   );
 });
 

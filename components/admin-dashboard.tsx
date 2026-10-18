@@ -4,6 +4,16 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,9 +21,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
-import { BackendError, fetchAdminStatus, generateCodes as requestCodes, logout as requestLogout, sendBatch, sendTestEmail } from "@/lib/backend";
+import {
+  BackendError,
+  cancelResend,
+  fetchAdminStatus,
+  generateCodes as requestCodes,
+  logout as requestLogout,
+  sendBatch,
+  sendTestEmail,
+  startResend,
+} from "@/lib/backend";
 import { DEFAULT_BODY, DEFAULT_SUBJECT, renderTemplate } from "@/lib/template";
-import type { AdminStatus, SendFailure } from "@/lib/types";
+import type { AdminStatus, SendFailure, SendMode } from "@/lib/types";
 
 const SUBJECT_KEY = "supernova-subject";
 const BODY_KEY = "supernova-body";
@@ -76,8 +95,9 @@ export function AdminDashboard() {
   const draft = useSyncExternalStore(subscribeDraft, getDraftSnapshot, () => DEFAULT_DRAFT);
   const [status, setStatus] = useState<AdminStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"codes" | "test" | null>(null);
+  const [busy, setBusy] = useState<"codes" | "test" | "resend" | null>(null);
   const [progress, setProgress] = useState<SendProgress | null>(null);
+  const [resendOpen, setResendOpen] = useState(false);
   const { subject, message } = draft;
 
   async function refresh() {
@@ -104,7 +124,9 @@ export function AdminDashboard() {
     ? renderTemplate(message, status.preview)
     : "The preview appears after the spreadsheets are connected.";
   const sending = progress?.running ?? false;
-  const canSend = Boolean(status && status.problems.length === 0 && status.unsent > 0 && message.includes("[link]") && subject.trim());
+  const draftReady = Boolean(status && status.problems.length === 0 && message.includes("[link]") && subject.trim());
+  const canSend = draftReady && Boolean(status && status.unsent > 0);
+  const canResend = draftReady && Boolean(status && status.reachable > 0);
 
   async function generateCodes() {
     setBusy("codes");
@@ -132,9 +154,35 @@ export function AdminDashboard() {
     }
   }
 
-  async function sendAll() {
-    if (!status) return;
-    const total = status.unsent;
+  async function resendAll() {
+    setResendOpen(false);
+    setBusy("resend");
+    let total = 0;
+    try {
+      total = (await startResend()).total;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start the resend.");
+      return;
+    } finally {
+      setBusy(null);
+    }
+    await runSend("all", total);
+  }
+
+  async function stopResend() {
+    setBusy("resend");
+    try {
+      await cancelResend();
+      toast.success("Resend cancelled.");
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not cancel the resend.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runSend(mode: SendMode, total: number) {
     const failed: SendFailure[] = [];
     let sent = 0;
     const skipRows: number[] = [];
@@ -142,7 +190,7 @@ export function AdminDashboard() {
 
     try {
       while (true) {
-        const body = await sendBatch(subject, message, skipRows);
+        const body = await sendBatch(subject, message, skipRows, mode);
         const batchSent = body.sent;
         const batchFailed = body.failed;
         const remaining = body.remaining;
@@ -250,8 +298,8 @@ export function AdminDashboard() {
               <CardTitle>Voting codes</CardTitle>
               <CardDescription>
                 {status.codesMissing === 0
-                  ? "Every audience row has a verification code."
-                  : `${status.codesMissing} rows still need a code.`}
+                  ? "Every audience row has a 6-character code and its link hash."
+                  : `${status.codesMissing} rows still need a code. Older long codes are replaced and marked unsent.`}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -265,7 +313,8 @@ export function AdminDashboard() {
             <CardHeader>
               <CardTitle>Invitation</CardTitle>
               <CardDescription>
-                `[Name]` and `[link]` are replaced for each person. {status.unsent} unsent{" "}
+                `[Name]`, `[link]`, and `[vcode]` are replaced for each person. `[vcode]` is the 6-character code for the
+                backup form. {status.unsent} unsent{" "}
                 {status.unsent === 1 ? "message" : "messages"}. A full send of 300–400 takes several minutes.
                 Gmail accounts are capped at about 500 messages a day.
               </CardDescription>
@@ -287,12 +336,18 @@ export function AdminDashboard() {
                   value={message}
                   onChange={(event) => saveDraft({ subject, message: event.target.value })}
                 />
+                {!message.includes("[vcode]") ? (
+                  <p className="text-sm text-destructive">
+                    Add `[vcode]` so everyone has their code for the backup form.
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium">Preview</p>
                 <pre className="overflow-auto rounded-lg bg-muted p-3 text-sm whitespace-pre-wrap">{preview}</pre>
                 <p className="text-xs text-muted-foreground">
-                  The test email uses the name Alex and a link that cannot vote. It is sent to {status.gmailUser || "GMAIL_USER"}.
+                  The test email uses the name Alex, the code TEST00, and a link that cannot vote. It is sent to{" "}
+                  {status.gmailUser || "the script account"}.
                 </p>
               </div>
               {status.invalidEmails.length > 0 ? (
@@ -328,15 +383,63 @@ export function AdminDashboard() {
                 </div>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => void sendAll()} disabled={!canSend || sending || busy !== null}>
+                <Button onClick={() => void runSend("unsent", status.unsent)} disabled={!canSend || sending || busy !== null}>
                   {sending ? "Sending…" : `Send ${status.unsent} emails`}
                 </Button>
                 <Button variant="outline" onClick={() => void sendTest()} disabled={sending || busy !== null || status.problems.length > 0}>
                   {busy === "test" ? "Sending test…" : "Send test to me"}
                 </Button>
               </div>
+              <div className="space-y-2 border-t pt-4">
+                <p className="text-sm font-medium">Resend to everyone</p>
+                {status.resend ? (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      A resend stopped with {status.resend.remaining} {status.resend.remaining === 1 ? "person" : "people"} left.
+                      Resuming skips everyone who already got the resent email.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        onClick={() => void runSend("all", status.resend?.remaining ?? 0)}
+                        disabled={!draftReady || sending || busy !== null}
+                      >
+                        {sending ? "Sending…" : `Resume resend (${status.resend.remaining})`}
+                      </Button>
+                      <Button variant="ghost" onClick={() => void stopResend()} disabled={sending || busy !== null}>
+                        Cancel resend
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      Sends the current draft to all {status.reachable} people with a code, including those who already got it.
+                      Their codes and links stay the same.
+                    </p>
+                    <Button variant="outline" onClick={() => setResendOpen(true)} disabled={!canResend || sending || busy !== null}>
+                      {busy === "resend" ? "Starting…" : `Resend to all ${status.reachable}`}
+                    </Button>
+                  </>
+                )}
+              </div>
             </CardContent>
           </Card>
+
+          <AlertDialog open={resendOpen} onOpenChange={setResendOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Resend to everyone?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This emails all {status.reachable} people again, including those who already got the invitation. Gmail
+                  allows about 500 messages a day. If it stops, you can resume later without emailing anyone twice.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Go back</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void resendAll()}>Resend to all</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </>
       ) : null}
     </main>
