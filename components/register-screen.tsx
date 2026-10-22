@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import Link from "next/link";
 import { CircleCheck, Clock } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
 import { SignedInAs } from "@/components/google-sign-in";
@@ -19,7 +18,7 @@ const JITTER_MS = 15000;
 type Phase =
   | { status: "loading" }
   | { status: "closed"; window: TimeWindow }
-  | { status: "registered"; registeredAt: string; already: boolean; voting?: TimeWindow }
+  | { status: "registered"; registeredAt: string; already: boolean }
   | { status: "error"; message: string };
 
 export function CheckinPage() {
@@ -80,13 +79,8 @@ function RegisterScreen({ session }: { session: UserSession }) {
           <p className="text-sm text-muted-foreground">{session.email}</p>
           <p className="mt-1 text-xs text-muted-foreground">Checked in {formatWhen(phase.registeredAt)}</p>
           <p className="mt-5 text-sm text-muted-foreground">
-            {phase.voting?.phase === "open"
-              ? "Voting is open now."
-              : "You're in the lucky draw. Voting opens later in the show. Scan the voting code or open the link when it's announced."}
+            You&apos;re in the lucky draw. Voting opens later in the show. Scan the voting code or open the link when it&apos;s announced.
           </p>
-          <Button className="mt-4" nativeButton={false} render={<Link href="/vote" />}>
-            Go to voting
-          </Button>
         </section>
       ) : null}
 
