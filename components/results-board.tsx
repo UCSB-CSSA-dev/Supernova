@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { AnimatePresence, LayoutGroup, MotionConfig, animate, motion, useMotionValue, useTransform } from "motion/react";
 import { Crown } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { AdminGate } from "@/components/auth-gate";
 import { Backdrop } from "@/components/backdrop";
 import { fetchResults } from "@/lib/backend";
 import { choiceKey, sharePlaces, type RankedChoice } from "@/lib/ranking";
@@ -29,6 +30,14 @@ type Gain = { id: number; key: string; amount: number };
 type Leader = { id: number; singerName: string; songName: string };
 
 export function ResultsBoard() {
+  return (
+    <AdminGate>
+      <Board />
+    </AdminGate>
+  );
+}
+
+function Board() {
   const [results, setResults] = useState<PublicResults | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [syncCount, setSyncCount] = useState(0);

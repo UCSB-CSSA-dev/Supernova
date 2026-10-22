@@ -7,7 +7,7 @@ import { getSession } from "@/lib/session";
 export function HomeRedirect() {
   const router = useRouter();
   useEffect(() => {
-    router.replace(getSession() ? "/dashboard" : "/result");
+    router.replace(getSession() ? "/dashboard" : "/login");
   }, [router]);
   return <main className="min-h-dvh" />;
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GoogleSignIn } from "@/components/google-sign-in";
 import { PageShell } from "@/components/page-shell";
@@ -29,9 +28,6 @@ export function LoginScreen() {
       ) : (
         <GoogleSignIn prompt="Sign in with your UCSB Google account to check in, vote, and enter the lucky draw." />
       )}
-      <Link href="/result" className="mt-6 text-sm text-primary underline-offset-4 hover:underline">
-        View the live results
-      </Link>
     </PageShell>
   );
 }

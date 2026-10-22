@@ -6,15 +6,15 @@ The audience checks in at the venue, votes later in the show, and is entered in 
 
 | Page | Who can open it |
 | --- | --- |
-| `/result` | Everyone. Live ranking, with a "Scan to vote" QR in the bottom-right until voting closes |
 | `/login` | Everyone. Google sign-in, then back to the page you were trying to open |
 | `/check-in` | Signed in. Opening it while check-in is open checks you in |
 | `/vote` | Signed in. Only people who checked in can actually vote |
 | `/random-order` | Signed in. Performers enter their name and get a unique random singing number from 1 to 20 |
 | `/dashboard` | Signed in. Links to every page; admin links appear for admins |
 | `/admin`, `/admin/check-in`, `/admin/voting-qr`, `/admin/lottery` | Admins only |
+| `/result` | Admins only. Live ranking for the projector, with a "Scan to vote" QR in the bottom-right until voting closes. Kept off audience phones so hundreds of people refreshing it can't overload Apps Script |
 
-`/` sends signed-out visitors to `/result` and signed-in people to `/dashboard`. Signed-out visitors who open any other page are sent to `/login`. The site is static, so this blocking only affects what the browser shows. The real rules (who can check in, vote, or use admin actions) are enforced by Apps Script on every request.
+`/` sends signed-out visitors to `/login` and signed-in people to `/dashboard`. Signed-out visitors who open any other page are sent to `/login`. The site is static, so this blocking only affects what the browser shows. The real rules (who can check in, vote, or use admin actions) are enforced by Apps Script on every request.
 
 1. **Check in.** While check-in is open, anyone who opens `/check-in` and signs in with a @ucsb.edu Google account is recorded in the Registrations sheet. `/admin/check-in` shows a QR code for that page on the projector. People who open the page before check-in opens are checked in automatically once it opens. The link works from anywhere, so check-in is limited by time, not by being in the room.
 2. **Vote.** `/vote` (or the QR on `/admin/voting-qr`) is the same for everyone. Only people who checked in can vote, once each, and only while voting is open. People who arrive before voting opens see a waiting screen that turns into the ballot when voting opens.

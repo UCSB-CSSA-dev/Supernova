@@ -45,7 +45,6 @@ function json_(body) {
 function handle_(data) {
   try {
     var action = String(data.action || "");
-    if (action === "results") return results_();
     if (action === "signIn") return signIn_(String(data.credential || ""));
     if (action === "me") return me_(requireUser_(data.session));
     if (action === "register") return register_(requireUser_(data.session));
@@ -55,6 +54,7 @@ function handle_(data) {
     if (action === "claimOrder") return claimOrder_(requireUser_(data.session), String(data.name || ""));
     var admin = requireAdmin_(data.session);
     if (action === "adminCheck") return { ok: true, email: admin.email, isOwner: isOwner_(admin.email) };
+    if (action === "results") return results_();
     if (action === "status") return status_(admin);
     if (action === "addAdmin") return addAdmin_(admin, String(data.email || ""));
     if (action === "removeAdmin") return removeAdmin_(admin, String(data.email || ""));
@@ -560,7 +560,7 @@ function castVote_(user, singerName, songName) {
   return { ok: true, status: "voted", singerName: singerName, songName: songName };
 }
 
-// ---------- Public results ----------
+// ---------- Results (admins only) ----------
 
 function choiceKey_(choice) {
   return choice.singerName + "\n" + choice.songName;

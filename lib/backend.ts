@@ -105,11 +105,6 @@ async function call<T>(payload: Record<string, unknown>, options: CallOptions = 
 
 // ---------- Audience ----------
 
-// The results board waits for each answer before asking again, so a stalled request must not hang forever.
-export function fetchResults(): Promise<PublicResults> {
-  return call<PublicResults>({ action: "results" }, { timeoutMs: 15000 });
-}
-
 export async function signIn(credential: string): Promise<UserSession> {
   const body = await call<{ session: string; email: string; name: string; expiresAt: number }>(
     { action: "signIn", credential },
@@ -159,6 +154,11 @@ export function signOut(): void {
 
 export function checkAdmin(): Promise<{ email: string; isOwner: boolean }> {
   return call({ action: "adminCheck", session: adminSession() }, { retries: 1 });
+}
+
+// The results board waits for each answer before asking again, so a stalled request must not hang forever.
+export function fetchResults(): Promise<PublicResults> {
+  return call<PublicResults>({ action: "results", session: adminSession() }, { timeoutMs: 15000 });
 }
 
 export function fetchAdminStatus(): Promise<AdminStatus> {
