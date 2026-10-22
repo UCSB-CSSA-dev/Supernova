@@ -19,7 +19,7 @@ const JITTER_MS = 15000;
 type Phase =
   | { status: "loading" }
   | { status: "closed"; window: TimeWindow }
-  | { status: "registered"; registeredAt: string; already: boolean; voting: TimeWindow }
+  | { status: "registered"; registeredAt: string; already: boolean; voting?: TimeWindow }
   | { status: "error"; message: string };
 
 export function CheckinPage() {
@@ -40,6 +40,9 @@ function RegisterScreen({ session }: { session: UserSession }) {
     async function run() {
       const result = await register(token);
       if (!active) return;
+      if (result.status !== "registered" && result.status !== "closed") {
+        throw new Error("Check-in isn't available right now. Ask an admin to redeploy the Apps Script.");
+      }
       setPhase(result);
       if (result.status === "registered") return;
       const opensAt = result.window.phase === "scheduled" && result.window.opensAt ? Date.parse(result.window.opensAt) : NaN;
@@ -77,7 +80,7 @@ function RegisterScreen({ session }: { session: UserSession }) {
           <p className="text-sm text-muted-foreground">{session.email}</p>
           <p className="mt-1 text-xs text-muted-foreground">Checked in {formatWhen(phase.registeredAt)}</p>
           <p className="mt-5 text-sm text-muted-foreground">
-            {phase.voting.phase === "open"
+            {phase.voting?.phase === "open"
               ? "Voting is open now."
               : "You're in the lucky draw. Voting opens later in the show. Scan the voting code or open the link when it's announced."}
           </p>
