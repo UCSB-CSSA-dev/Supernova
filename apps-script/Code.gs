@@ -1,15 +1,31 @@
-var RESULT_HEADERS = ["voted_at", "name", "email", "verification_code", "singer_name", "song_name"];
-// No 0/O or 1/I/L, so codes are easy to read and type into the backup form.
-var CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-var CODE_PATTERN = /^[A-Z0-9]{6}$/;
-var HASH_PATTERN = /^[a-f0-9]{32}$/;
-var SAMPLE_CODE = "TEST00";
+var ALLOWED_DOMAIN = "ucsb.edu";
+// Always an admin, and the only account that can add or remove trusted admins.
+var OWNER_EMAIL = "jamesguo@ucsb.edu";
+var REGISTRATION_HEADERS = ["registered_at", "email", "name"];
+var RESULT_HEADERS = ["voted_at", "name", "email", "singer_name", "song_name"];
+var LOTTERY_HEADERS = ["drawn_at", "round", "email", "name"];
+var LOTTERY_SHEET = "Lottery";
+// Singing order lives on its own tab of the Variables spreadsheet; the shuffle is the ORDER_SHUFFLE variable.
+var ORDER_SIZE = 20;
+var ORDER_SHEET = "Singing order";
+var ORDER_HEADERS = ["number", "name", "email", "claimed_at"];
+var ORDER_NAME_MAX = 40;
+// Runtime settings (CHECKIN_OPENS_AT, VOTING_CLOSES_AT, ADMIN_EMAILS, ...), one row per variable.
+var VARIABLE_HEADERS = ["variable_name", "value", "created_at"];
+// Hand edits to the Variables sheet take effect within this long; dashboard changes apply immediately.
+var VARIABLES_CACHE_SECONDS = 5;
+// The check-in QR changes every slot; a scan is accepted for the current and the previous slot.
+var CHECKIN_SLOT_MS = 30000;
+// Time a scanned check-in has to finish Google sign-in.
+var TICKET_MS = 10 * 60 * 1000;
+var SESSION_MS = 12 * 60 * 60 * 1000;
+var WINDOWS = { checkin: "CHECKIN", voting: "VOTING" };
 var REQUIRED_PROPS = [
-  "AUDIENCE_SPREADSHEET_ID",
+  "REGISTRATIONS_SPREADSHEET_ID",
   "SINGERS_SPREADSHEET_ID",
   "RESULTS_SPREADSHEET_ID",
-  "ADMIN_PASSWORD",
-  "APP_URL",
+  "VARIABLES_SPREADSHEET_ID",
+  "GOOGLE_CLIENT_ID",
 ];
 
 function doGet(e) {
@@ -34,47 +50,101 @@ function handle_(data) {
   try {
     var action = String(data.action || "");
     if (action === "results") return results_();
-    if (action === "voteState") return voteState_(String(data.code || ""));
-    if (action === "vote") return castVote_(String(data.code || ""), String(data.singerName || ""), String(data.songName || ""));
-    if (action === "login") return login_(String(data.password || ""));
-    if (action === "logout") return logout_(String(data.token || ""));
-    requireAdmin_(String(data.token || ""));
-    if (action === "status") return status_();
-    if (action === "codes") return { ok: true, created: generateCodes_() };
-    if (action === "testEmail") return testEmail_(String(data.subject || ""), String(data.message || ""));
-    if (action === "send") return sendBatch_(String(data.subject || ""), String(data.message || ""), data.skipRows, String(data.mode || "unsent"));
-    if (action === "resendStart") return resendStart_();
-    if (action === "resendCancel") return resendCancel_();
+    if (action === "signIn") return signIn_(String(data.credential || ""));
+    if (action === "checkinTicket") return checkinTicket_(String(data.code || ""));
+    if (action === "me") return me_(requireUser_(data.session));
+    if (action === "register") return register_(requireUser_(data.session), String(data.ticket || ""));
+    if (action === "voteState") return voteState_(requireUser_(data.session));
+    if (action === "vote") return castVote_(requireUser_(data.session), String(data.singerName || ""), String(data.songName || ""));
+    if (action === "orderState") return orderState_(requireUser_(data.session));
+    if (action === "claimOrder") return claimOrder_(requireUser_(data.session), String(data.name || ""));
+    var admin = requireAdmin_(data.session);
+    if (action === "adminCheck") return { ok: true, email: admin.email, isOwner: isOwner_(admin.email) };
+    if (action === "status") return status_(admin);
+    if (action === "addAdmin") return addAdmin_(admin, String(data.email || ""));
+    if (action === "removeAdmin") return removeAdmin_(admin, String(data.email || ""));
+    if (action === "setWindow") return setWindow_(String(data.name || ""), data.opensAt, data.closesAt);
+    if (action === "checkinCode") return checkinCode_();
+    if (action === "lotteryState") return lotteryState_();
+    if (action === "lotteryDraw") return lotteryDraw_();
+    if (action === "orderAdmin") return orderAdmin_();
+    if (action === "orderReset") return orderReset_();
     return { ok: false, error: "Unknown action." };
   } catch (error) {
     return {
       ok: false,
       error: error && error.message ? error.message : "Something went wrong.",
       unauthenticated: Boolean(error && error.unauthenticated),
+      signedOut: Boolean(error && error.signedOut),
     };
   }
 }
 
-function login_(password) {
-  var expected = prop_("ADMIN_PASSWORD");
-  if (!password || password !== expected) return { ok: false, error: "Wrong password." };
-  var token = Utilities.getUuid() + Utilities.getUuid();
-  CacheService.getScriptCache().put("admin:" + token, "1", 21600);
-  return { ok: true, token: token };
+// ---------- Admin ----------
+
+function isOwner_(email) {
+  return email === OWNER_EMAIL;
 }
 
-function logout_(token) {
-  if (token) CacheService.getScriptCache().remove("admin:" + token);
-  return { ok: true };
+function trustedAdmins_(fresh) {
+  var raw = readVariables_(fresh).ADMIN_EMAILS || "";
+  return raw.split(",").map(function (email) { return email.trim().toLowerCase(); }).filter(function (email) {
+    return email && email !== OWNER_EMAIL;
+  });
 }
 
-function requireAdmin_(token) {
-  if (!token || !CacheService.getScriptCache().get("admin:" + token)) {
-    var error = new Error("Not authenticated");
+function saveTrustedAdmins_(emails) {
+  setVariables_({ ADMIN_EMAILS: emails.join(",") });
+}
+
+// Checked on every request, so removing someone takes effect immediately.
+function requireAdmin_(session) {
+  var user = requireUser_(session);
+  if (!isOwner_(user.email) && trustedAdmins_().indexOf(user.email) === -1) {
+    var error = new Error(user.email + " is not an admin.");
     error.unauthenticated = true;
     throw error;
   }
+  return user;
 }
+
+function requireOwner_(admin) {
+  if (!isOwner_(admin.email)) throw new Error("Only " + OWNER_EMAIL + " can change the admin list.");
+}
+
+function adminList_() {
+  return { owner: OWNER_EMAIL, trusted: trustedAdmins_() };
+}
+
+function addAdmin_(admin, email) {
+  requireOwner_(admin);
+  email = email.trim().toLowerCase();
+  if (!isAllowedEmail_(email)) throw new Error("Admins must use a @" + ALLOWED_DOMAIN + " address.");
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var trusted = trustedAdmins_(true);
+    if (email !== OWNER_EMAIL && trusted.indexOf(email) === -1) saveTrustedAdmins_(trusted.concat([email]));
+    return { ok: true, admins: adminList_() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function removeAdmin_(admin, email) {
+  requireOwner_(admin);
+  email = email.trim().toLowerCase();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    saveTrustedAdmins_(trustedAdmins_(true).filter(function (item) { return item !== email; }));
+    return { ok: true, admins: adminList_() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---------- Properties and signing ----------
 
 function missingProps_() {
   var props = PropertiesService.getScriptProperties().getProperties();
@@ -91,53 +161,178 @@ function prop_(name) {
   return String(value).trim();
 }
 
-function appUrl_() {
-  return prop_("APP_URL").replace(/\/+$/, "");
-}
-
-function voteLink_(hash) {
-  return appUrl_() + "/vote?code=" + encodeURIComponent(hash);
-}
-
-function hashSecret_() {
+// Deleting SESSION_SECRET signs everyone out and voids outstanding check-in tickets.
+function secret_() {
   var props = PropertiesService.getScriptProperties();
-  var secret = props.getProperty("HASH_SECRET");
+  var secret = props.getProperty("SESSION_SECRET");
   if (!secret) {
     secret = Utilities.getUuid() + Utilities.getUuid();
-    props.setProperty("HASH_SECRET", secret);
+    props.setProperty("SESSION_SECRET", secret);
   }
   return secret;
 }
 
-// Keyed so the 6-character code cannot be recovered from a link by brute force.
-function hashCode_(code) {
-  var bytes = Utilities.computeHmacSha256Signature(code, hashSecret_());
-  return bytes.slice(0, 16).map(function (b) { return ("0" + (b & 255).toString(16)).slice(-2); }).join("");
+function hmac_(value) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(value, secret_())).replace(/=+$/, "");
 }
 
-function randomCode_() {
-  var code = "";
-  while (code.length < 6) {
-    var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid());
-    for (var i = 0; i < bytes.length && code.length < 6; i++) {
-      var value = bytes[i] & 255;
-      if (value < CODE_ALPHABET.length * 8) code += CODE_ALPHABET.charAt(value % CODE_ALPHABET.length);
-    }
-  }
-  return code;
+function sign_(payload) {
+  var body = Utilities.base64EncodeWebSafe(JSON.stringify(payload), Utilities.Charset.UTF_8).replace(/=+$/, "");
+  return body + "." + hmac_(body);
 }
 
-// Plain text format stops Sheets from reading codes like "23E456" as numbers.
-function setText_(sheet, row, column, value) {
-  sheet.getRange(row, column).setNumberFormat("@").setValue(value);
-}
-
-function sheet_(idProp, label) {
+function verify_(token, type) {
+  var parts = String(token || "").split(".");
+  if (parts.length !== 2 || !parts[0] || hmac_(parts[0]) !== parts[1]) return null;
   try {
-    return SpreadsheetApp.openById(prop_(idProp)).getSheets()[0];
+    var padded = parts[0] + "===".slice((parts[0].length + 3) % 4);
+    var payload = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(padded)).getDataAsString("UTF-8"));
+    if (!payload || payload.t !== type || !(Number(payload.x) > Date.now())) return null;
+    return payload;
+  } catch (error) {
+    return null;
+  }
+}
+
+// ---------- Google sign-in ----------
+
+function isAllowedEmail_(email) {
+  return /^[^\s@]+@ucsb\.edu$/.test(String(email || ""));
+}
+
+function signIn_(credential) {
+  if (!credential) throw new Error("Google did not return a sign-in credential.");
+  var response = UrlFetchApp.fetch(
+    "https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(credential),
+    { muteHttpExceptions: true }
+  );
+  if (response.getResponseCode() !== 200) throw new Error("Google could not verify this sign-in. Try again.");
+  var claims = JSON.parse(response.getContentText());
+  if (claims.aud !== prop_("GOOGLE_CLIENT_ID")) throw new Error("This sign-in was issued for a different app.");
+  if (claims.iss !== "accounts.google.com" && claims.iss !== "https://accounts.google.com") {
+    throw new Error("This sign-in did not come from Google.");
+  }
+  var email = String(claims.email || "").trim().toLowerCase();
+  if (String(claims.email_verified) !== "true") throw new Error("Your Google email address is not verified.");
+  // hd is only set for Google Workspace accounts, so a personal Google account registered with a ucsb.edu address is rejected.
+  if (!isAllowedEmail_(email) || claims.hd !== ALLOWED_DOMAIN) {
+    throw new Error("Sign in with your @" + ALLOWED_DOMAIN + " Google account." + (email ? " " + email + " can't be used." : ""));
+  }
+  var name = String(claims.name || "").trim() || email.split("@")[0];
+  var expiresAt = Date.now() + SESSION_MS;
+  return {
+    ok: true,
+    session: sign_({ t: "session", e: email, n: name, x: expiresAt }),
+    email: email,
+    name: name,
+    expiresAt: expiresAt,
+  };
+}
+
+function requireUser_(token) {
+  var payload = verify_(token, "session");
+  if (!payload || !isAllowedEmail_(payload.e)) {
+    var error = new Error("Your sign-in expired. Sign in again.");
+    error.signedOut = true;
+    throw error;
+  }
+  return { email: String(payload.e), name: String(payload.n || "") };
+}
+
+// ---------- Check-in and voting windows ----------
+
+// A time typed into the Variables sheet by hand that can't be read is treated as unset.
+function storedTime_(value) {
+  if (!value) return "";
+  var date = new Date(value);
+  return isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function windowState_(name) {
+  var prefix = WINDOWS[name];
+  var variables = readVariables_();
+  var opensAt = storedTime_(variables[prefix + "_OPENS_AT"]);
+  var closesAt = storedTime_(variables[prefix + "_CLOSES_AT"]);
+  var now = new Date().toISOString();
+  var phase = "unscheduled";
+  if (opensAt) {
+    if (now < opensAt) phase = "scheduled";
+    else if (closesAt && now >= closesAt) phase = "closed";
+    else phase = "open";
+  }
+  return { opensAt: opensAt || null, closesAt: closesAt || null, phase: phase };
+}
+
+function isoOrEmpty_(value, label) {
+  if (value === null || value === undefined || String(value).trim() === "") return "";
+  var date = new Date(String(value));
+  if (isNaN(date.getTime())) throw new Error("The " + label + " time is not a valid date.");
+  return date.toISOString();
+}
+
+function setWindow_(name, opensAt, closesAt) {
+  var prefix = WINDOWS[name];
+  if (!prefix) throw new Error("Unknown window " + name + ".");
+  var opens = isoOrEmpty_(opensAt, "opening");
+  var closes = isoOrEmpty_(closesAt, "closing");
+  if (closes && !opens) throw new Error("Set an opening time before a closing time.");
+  if (opens && closes && closes <= opens) throw new Error("The closing time must be after the opening time.");
+  var updates = {};
+  updates[prefix + "_OPENS_AT"] = opens;
+  updates[prefix + "_CLOSES_AT"] = closes;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    setVariables_(updates);
+  } finally {
+    lock.releaseLock();
+  }
+  return { ok: true, window: windowState_(name) };
+}
+
+function checkinSlotCode_(slot) {
+  return hmac_("checkin:" + slot).slice(0, 16);
+}
+
+function checkinCode_() {
+  var win = windowState_("checkin");
+  var now = Date.now();
+  var slot = Math.floor(now / CHECKIN_SLOT_MS);
+  return {
+    ok: true,
+    window: win,
+    code: win.phase === "open" ? checkinSlotCode_(slot) : null,
+    refreshInMs: (slot + 1) * CHECKIN_SLOT_MS - now,
+    slotMs: CHECKIN_SLOT_MS,
+    registeredCount: readRegistrations_().length,
+  };
+}
+
+// Trades a freshly scanned code for a ticket, so the person has time to sign in after the code rotates.
+function checkinTicket_(code) {
+  var win = windowState_("checkin");
+  if (win.phase !== "open") return { ok: true, status: "closed", window: win };
+  var slot = Math.floor(Date.now() / CHECKIN_SLOT_MS);
+  code = String(code || "").trim();
+  if (!code || (code !== checkinSlotCode_(slot) && code !== checkinSlotCode_(slot - 1))) {
+    return { ok: true, status: "expired" };
+  }
+  var expiresAt = Date.now() + TICKET_MS;
+  return { ok: true, status: "ok", ticket: sign_({ t: "ticket", x: expiresAt }), expiresAt: expiresAt };
+}
+
+// ---------- Spreadsheets ----------
+
+function spreadsheet_(idProp, label) {
+  try {
+    return SpreadsheetApp.openById(prop_(idProp));
   } catch (error) {
     throw new Error(label + " spreadsheet could not be opened. Check the ID and that this Google account can access it.");
   }
+}
+
+function sheet_(idProp, label) {
+  return spreadsheet_(idProp, label).getSheets()[0];
 }
 
 function headerMap_(sheet) {
@@ -151,12 +346,19 @@ function headerMap_(sheet) {
   return map;
 }
 
-function ensureColumn_(sheet, map, name) {
-  if (map[name]) return map[name];
-  var column = Math.max(sheet.getLastColumn(), Object.keys(map).length) + 1;
-  sheet.getRange(1, column).setValue(name);
-  map[name] = column;
-  return column;
+// Plain text format stops Sheets from turning timestamps into dates.
+function ensureHeaders_(sheet, headers, label) {
+  if (sheet.getLastRow() > 0 && String(sheet.getRange(1, 1).getDisplayValue() || "").trim()) {
+    var map = headerMap_(sheet);
+    var missing = headers.filter(function (header) { return !map[header]; });
+    if (missing.length) {
+      throw new Error("The " + label + " sheet is missing " + missing.join(", ") + ". The first row should be: " + headers.join(", ") + ".");
+    }
+    return map;
+  }
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat("@");
+  return headerMap_(sheet);
 }
 
 function cell_(row, column) {
@@ -164,30 +366,77 @@ function cell_(row, column) {
   return String(row[column - 1] || "").trim();
 }
 
-function readAudience_() {
-  var sheet = sheet_("AUDIENCE_SPREADSHEET_ID", "Audience");
-  if (sheet.getLastRow() < 1) throw new Error("The audience spreadsheet is empty. Add a header row with Name and Email.");
-  var map = headerMap_(sheet);
-  if (!map.name || !map.email) throw new Error("The audience spreadsheet needs Name and Email columns in the first row.");
-  ensureColumn_(sheet, map, "verification_code");
-  ensureColumn_(sheet, map, "verification_hash");
-  ensureColumn_(sheet, map, "email_sent_at");
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  var values = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getDisplayValues();
+function dataRows_(sheet) {
+  if (sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
+}
+
+// appendRow is atomic, so concurrent requests never overwrite each other's rows.
+function appendRecord_(sheet, map, record) {
+  var row = new Array(sheet.getLastColumn()).fill("");
+  Object.keys(record).forEach(function (key) { row[map[key] - 1] = record[key]; });
+  sheet.appendRow(row);
+}
+
+function variablesSheet_() {
+  return sheet_("VARIABLES_SPREADSHEET_ID", "Variables");
+}
+
+// Read on nearly every request, so it's cached; pass fresh when about to write back.
+function readVariables_(fresh) {
+  var cache = CacheService.getScriptCache();
+  var cached = fresh ? null : cache.get("variables");
+  if (cached) return JSON.parse(cached);
+  var sheet = variablesSheet_();
+  var map = ensureHeaders_(sheet, VARIABLE_HEADERS, "Variables");
+  var values = {};
+  dataRows_(sheet).forEach(function (row) {
+    var name = cell_(row, map.variable_name).toUpperCase();
+    if (name && !Object.prototype.hasOwnProperty.call(values, name)) values[name] = cell_(row, map.value);
+  });
+  cache.put("variables", JSON.stringify(values), VARIABLES_CACHE_SECONDS);
+  return values;
+}
+
+// Updates each variable's row in place (or adds one); "" clears a value. Callers must hold the script lock.
+function setVariables_(updates) {
+  var sheet = variablesSheet_();
+  var map = ensureHeaders_(sheet, VARIABLE_HEADERS, "Variables");
+  var names = dataRows_(sheet).map(function (row) { return cell_(row, map.variable_name).toUpperCase(); });
+  var createdAt = new Date().toISOString();
+  Object.keys(updates).forEach(function (name) {
+    var rowNumber = names.indexOf(name) + 2;
+    if (rowNumber === 1) rowNumber = sheet.getLastRow() + 1;
+    var record = { variable_name: name, value: updates[name], created_at: createdAt };
+    Object.keys(record).forEach(function (key) {
+      // Plain text keeps Sheets from turning ISO timestamps into dates.
+      sheet.getRange(rowNumber, map[key]).setNumberFormat("@").setValue(record[key]);
+    });
+  });
+  CacheService.getScriptCache().remove("variables");
+}
+
+function registrationsSheet_() {
+  return sheet_("REGISTRATIONS_SPREADSHEET_ID", "Registrations");
+}
+
+// Duplicate rows from simultaneous check-ins are ignored; the first row for an email wins.
+function readRegistrations_() {
+  var sheet = registrationsSheet_();
+  var map = ensureHeaders_(sheet, REGISTRATION_HEADERS, "Registrations");
+  var seen = {};
   var rows = [];
-  values.forEach(function (row, index) {
-    var record = {
-      rowNumber: index + 2,
-      name: cell_(row, map.name),
-      email: cell_(row, map.email),
-      verificationCode: cell_(row, map.verification_code),
-      verificationHash: cell_(row, map.verification_hash).toLowerCase(),
-      emailSentAt: cell_(row, map.email_sent_at),
-    };
-    if (record.name || record.email || record.verificationCode) rows.push(record);
+  dataRows_(sheet).forEach(function (row) {
+    var email = cell_(row, map.email).toLowerCase();
+    if (!email || seen[email]) return;
+    seen[email] = true;
+    rows.push({ registeredAt: cell_(row, map.registered_at), email: email, name: cell_(row, map.name) });
   });
   return rows;
+}
+
+function findRegistration_(email) {
+  return readRegistrations_().filter(function (row) { return row.email === email; })[0] || null;
 }
 
 function readSingers_() {
@@ -197,11 +446,9 @@ function readSingers_() {
   if (!map.singer_name || !map.song_name) {
     throw new Error("The singer spreadsheet needs singer_name and song_name columns in the first row.");
   }
-  if (sheet.getLastRow() < 2) return [];
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
   var seen = {};
   var singers = [];
-  values.forEach(function (row) {
+  dataRows_(sheet).forEach(function (row) {
     var singerName = cell_(row, map.singer_name);
     var songName = cell_(row, map.song_name);
     if (!singerName && !songName) return;
@@ -214,74 +461,134 @@ function readSingers_() {
   return singers;
 }
 
-function ensureResultHeaders_(sheet) {
-  if (sheet.getLastRow() > 0 && String(sheet.getRange(1, 1).getDisplayValue() || "").trim()) {
-    var map = headerMap_(sheet);
-    var missing = RESULT_HEADERS.filter(function (header) { return !map[header]; });
-    if (missing.length) {
-      throw new Error("The results spreadsheet is missing " + missing.join(", ") + ". The first row should be: " + RESULT_HEADERS.join(", ") + ".");
-    }
-    return;
-  }
-  sheet.getRange(1, 1, 1, RESULT_HEADERS.length).setValues([RESULT_HEADERS]);
+function resultsSheet_() {
+  return sheet_("RESULTS_SPREADSHEET_ID", "Results");
 }
 
+// Only the first ballot from each email counts.
 function readBallots_() {
-  var ballots = readBallotRows_();
-  var extras = duplicateRows_(ballots);
-  if (!extras.length) return ballots;
-  var sheet = sheet_("RESULTS_SPREADSHEET_ID", "Results");
-  extras.sort(function (a, b) { return b - a; });
-  extras.forEach(function (rowNumber) { sheet.deleteRow(rowNumber); });
-  return readBallotRows_();
-}
-
-function readBallotRows_() {
-  var sheet = sheet_("RESULTS_SPREADSHEET_ID", "Results");
-  ensureResultHeaders_(sheet);
-  var map = headerMap_(sheet);
-  if (sheet.getLastRow() < 2) return [];
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
+  var sheet = resultsSheet_();
+  var map = ensureHeaders_(sheet, RESULT_HEADERS, "Results");
+  var seen = {};
   var ballots = [];
-  values.forEach(function (row, index) {
-    var record = {
-      rowNumber: index + 2,
+  dataRows_(sheet).forEach(function (row) {
+    var email = cell_(row, map.email).toLowerCase();
+    if (!email || seen[email]) return;
+    seen[email] = true;
+    ballots.push({
       votedAt: cell_(row, map.voted_at),
       name: cell_(row, map.name),
-      email: cell_(row, map.email),
-      verificationCode: cell_(row, map.verification_code),
+      email: email,
       singerName: cell_(row, map.singer_name),
       songName: cell_(row, map.song_name),
-    };
-    if (record.verificationCode || record.singerName || record.songName) ballots.push(record);
+    });
   });
   return ballots;
 }
 
-function isEarlier_(candidate, current) {
-  if (candidate.votedAt !== current.votedAt) return candidate.votedAt < current.votedAt;
-  return candidate.rowNumber < current.rowNumber;
+function findBallot_(email) {
+  return readBallots_().filter(function (ballot) { return ballot.email === email; })[0] || null;
 }
 
-function winningBallots_(ballots) {
-  var winners = {};
-  ballots.forEach(function (ballot) {
-    if (!ballot.verificationCode) return;
-    var current = winners[ballot.verificationCode];
-    if (!current || isEarlier_(ballot, current)) winners[ballot.verificationCode] = ballot;
-  });
-  return Object.keys(winners).map(function (code) { return winners[code]; });
+function lotterySheet_() {
+  var spreadsheet = spreadsheet_("REGISTRATIONS_SPREADSHEET_ID", "Registrations");
+  var sheet = spreadsheet.getSheetByName(LOTTERY_SHEET) || spreadsheet.insertSheet(LOTTERY_SHEET, spreadsheet.getSheets().length);
+  return sheet;
 }
 
-function duplicateRows_(ballots) {
-  var winnerRow = {};
-  winningBallots_(ballots).forEach(function (ballot) {
-    winnerRow[ballot.verificationCode] = ballot.rowNumber;
+function readDraws_() {
+  var sheet = lotterySheet_();
+  var map = ensureHeaders_(sheet, LOTTERY_HEADERS, "Lottery");
+  var draws = [];
+  dataRows_(sheet).forEach(function (row) {
+    var email = cell_(row, map.email).toLowerCase();
+    if (!email) return;
+    draws.push({
+      round: Number(cell_(row, map.round)) || draws.length + 1,
+      drawnAt: cell_(row, map.drawn_at),
+      email: email,
+      name: cell_(row, map.name),
+    });
   });
-  return ballots.filter(function (ballot) {
-    return winnerRow[ballot.verificationCode] && winnerRow[ballot.verificationCode] !== ballot.rowNumber;
-  }).map(function (ballot) { return ballot.rowNumber; });
+  return draws;
 }
+
+// ---------- Audience actions ----------
+
+function me_(user) {
+  var registration = findRegistration_(user.email);
+  return {
+    ok: true,
+    email: user.email,
+    name: user.name,
+    registered: Boolean(registration),
+    registeredAt: registration ? registration.registeredAt : null,
+    checkin: windowState_("checkin"),
+    voting: windowState_("voting"),
+  };
+}
+
+function register_(user, ticket) {
+  var existing = findRegistration_(user.email);
+  if (existing) return { ok: true, status: "registered", registeredAt: existing.registeredAt, already: true };
+  if (!verify_(ticket, "ticket")) return { ok: true, status: "expired" };
+  var sheet = registrationsSheet_();
+  var map = ensureHeaders_(sheet, REGISTRATION_HEADERS, "Registrations");
+  var registeredAt = new Date().toISOString();
+  appendRecord_(sheet, map, { registered_at: registeredAt, email: user.email, name: user.name });
+  return { ok: true, status: "registered", registeredAt: registeredAt, already: false };
+}
+
+// Once voting is scheduled, phones get the ballot early and open it on their own at opensAt,
+// so nobody has to ask the script at the moment voting opens. castVote_ still enforces the window.
+function notOpen_(win) {
+  return {
+    ok: true,
+    status: "notOpen",
+    window: win,
+    serverTime: Date.now(),
+    candidates: win.phase === "scheduled" ? readSingers_() : null,
+  };
+}
+
+function voteState_(user) {
+  if (!findRegistration_(user.email)) return { ok: true, status: "unregistered" };
+  var ballot = findBallot_(user.email);
+  if (ballot) return { ok: true, status: "used", singerName: ballot.singerName, songName: ballot.songName };
+  var win = windowState_("voting");
+  if (win.phase !== "open") return notOpen_(win);
+  return { ok: true, status: "open", candidates: readSingers_() };
+}
+
+function castVote_(user, singerName, songName) {
+  if (!findRegistration_(user.email)) return { ok: true, status: "unregistered" };
+  var existing = findBallot_(user.email);
+  if (existing) return { ok: true, status: "used", singerName: existing.singerName, songName: existing.songName };
+  var win = windowState_("voting");
+  if (win.phase !== "open") return notOpen_(win);
+  var match = readSingers_().filter(function (singer) {
+    return singer.singerName === singerName && singer.songName === songName;
+  })[0];
+  if (!match) return { ok: true, status: "unknownChoice" };
+  var sheet = resultsSheet_();
+  var map = ensureHeaders_(sheet, RESULT_HEADERS, "Results");
+  appendRecord_(sheet, map, {
+    voted_at: new Date().toISOString(),
+    name: user.name,
+    email: user.email,
+    singer_name: singerName,
+    song_name: songName,
+  });
+  CacheService.getScriptCache().remove("results");
+  // If the same person voted from two devices at once, the earlier row is the one that counts.
+  var counted = findBallot_(user.email);
+  if (counted && (counted.singerName !== singerName || counted.songName !== songName)) {
+    return { ok: true, status: "used", singerName: counted.singerName, songName: counted.songName };
+  }
+  return { ok: true, status: "voted", singerName: singerName, songName: songName };
+}
+
+// ---------- Public results ----------
 
 function choiceKey_(choice) {
   return choice.singerName + "\n" + choice.songName;
@@ -292,13 +599,15 @@ function results_() {
   var cached = cache.get("results");
   if (cached) return JSON.parse(cached);
   var singers = readSingers_();
-  var ballots = winningBallots_(readBallots_());
+  var ballots = readBallots_();
   var counts = {};
   singers.forEach(function (singer) { counts[choiceKey_(singer)] = 0; });
+  var counted = 0;
   ballots.forEach(function (ballot) {
     var key = choiceKey_(ballot);
     if (counts[key] === undefined) return;
     counts[key] += 1;
+    counted += 1;
   });
   var ranked = singers.map(function (singer) {
     return { singerName: singer.singerName, songName: singer.songName, votes: counts[choiceKey_(singer)] || 0 };
@@ -306,312 +615,276 @@ function results_() {
   ranked.sort(function (a, b) {
     return b.votes - a.votes || a.singerName.localeCompare(b.singerName) || a.songName.localeCompare(b.songName);
   });
+  var place = 0;
   var payload = {
     ok: true,
-    totalVotes: ballots.length,
+    totalVotes: counted,
     ranked: ranked.map(function (choice, index) {
-      return { place: index + 1, singerName: choice.singerName, songName: choice.songName, votes: choice.votes };
+      if (index === 0 || choice.votes !== ranked[index - 1].votes) place = index + 1;
+      return { place: place, singerName: choice.singerName, songName: choice.songName, votes: choice.votes };
     }),
     updatedAt: new Date().toISOString(),
+    voting: windowState_("voting"),
   };
   cache.put("results", JSON.stringify(payload), 1);
   return payload;
 }
 
-function voteState_(hash) {
-  var person = findPerson_(hash);
-  if (!person) return { ok: true, status: "invalid" };
-  var existing = winningBallots_(readBallots_()).filter(function (ballot) {
-    return ballot.verificationCode === person.verificationCode;
-  })[0];
-  if (existing) return { ok: true, status: "used", singerName: existing.singerName, songName: existing.songName };
-  return { ok: true, status: "open", candidates: readSingers_() };
+// ---------- Lottery ----------
+
+// Rejection sampling keeps every index equally likely.
+function randomIndex_(n) {
+  var limit = Math.floor(4294967296 / n) * n;
+  while (true) {
+    var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid());
+    var value = (bytes[0] & 255) * 16777216 + ((bytes[1] & 255) << 16) + ((bytes[2] & 255) << 8) + (bytes[3] & 255);
+    if (value < limit) return value % n;
+  }
 }
 
-function findPerson_(hash) {
-  hash = String(hash || "").trim().toLowerCase();
-  if (!HASH_PATTERN.test(hash)) return null;
-  var matches = readAudience_().filter(function (row) {
-    return row.verificationCode && row.verificationHash === hash;
-  });
-  return matches[0] || null;
+function lotteryPayload_(registrations, draws) {
+  var drawn = {};
+  draws.forEach(function (draw) { drawn[draw.email] = true; });
+  var pool = registrations.filter(function (row) { return !drawn[row.email]; });
+  return {
+    ok: true,
+    draws: draws,
+    registered: registrations.length,
+    eligible: pool.length,
+    names: pool.slice(0, 200).map(function (row) { return row.name || row.email.split("@")[0]; }),
+  };
 }
 
-function castVote_(hash, singerName, songName) {
+function lotteryState_() {
+  return lotteryPayload_(readRegistrations_(), readDraws_());
+}
+
+function lotteryDraw_() {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var person = findPerson_(hash);
-    if (!person) return { ok: false, error: "invalid" };
-    var code = person.verificationCode;
-    var existing = winningBallots_(readBallots_()).filter(function (ballot) {
-      return ballot.verificationCode === code;
-    })[0];
-    if (existing) return { ok: false, error: "used", singerName: existing.singerName, songName: existing.songName };
-    var match = readSingers_().filter(function (singer) {
-      return singer.singerName === singerName && singer.songName === songName;
-    })[0];
-    if (!match) return { ok: false, error: "unknown-choice" };
-    var resultsSheet = sheet_("RESULTS_SPREADSHEET_ID", "Results");
-    ensureResultHeaders_(resultsSheet);
-    var map = headerMap_(resultsSheet);
-    var row = new Array(resultsSheet.getLastColumn()).fill("");
-    row[map.voted_at - 1] = new Date().toISOString();
-    row[map.name - 1] = person.name;
-    row[map.email - 1] = person.email;
-    row[map.verification_code - 1] = code;
-    row[map.singer_name - 1] = singerName;
-    row[map.song_name - 1] = songName;
-    resultsSheet.getRange(resultsSheet.getLastRow() + 1, 1, 1, row.length).setNumberFormat("@").setValues([row]);
-    CacheService.getScriptCache().remove("results");
-    return { ok: true, singerName: singerName, songName: songName };
+    var registrations = readRegistrations_();
+    var draws = readDraws_();
+    var drawn = {};
+    draws.forEach(function (draw) { drawn[draw.email] = true; });
+    var pool = registrations.filter(function (row) { return !drawn[row.email]; });
+    if (!pool.length) {
+      throw new Error(registrations.length ? "Everyone who checked in has already been drawn." : "Nobody has checked in yet.");
+    }
+    var person = pool[randomIndex_(pool.length)];
+    var round = draws.reduce(function (max, draw) { return Math.max(max, draw.round); }, 0) + 1;
+    var winner = { round: round, drawnAt: new Date().toISOString(), email: person.email, name: person.name };
+    var sheet = lotterySheet_();
+    var map = ensureHeaders_(sheet, LOTTERY_HEADERS, "Lottery");
+    appendRecord_(sheet, map, { drawn_at: winner.drawnAt, round: String(round), email: winner.email, name: winner.name });
+    var payload = lotteryPayload_(registrations, draws.concat([winner]));
+    payload.winner = winner;
+    return payload;
   } finally {
     lock.releaseLock();
   }
 }
 
-function isEmail_(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+// ---------- Singing order ----------
+
+function orderSheet_() {
+  var spreadsheet = spreadsheet_("VARIABLES_SPREADSHEET_ID", "Variables");
+  return spreadsheet.getSheetByName(ORDER_SHEET) || spreadsheet.insertSheet(ORDER_SHEET, spreadsheet.getSheets().length);
 }
 
-function sheetStatus_(label, idProp, read) {
+// The first row for an email and for a number wins, so a hand edit can never give out a number twice.
+function readOrder_() {
+  var sheet = orderSheet_();
+  var map = ensureHeaders_(sheet, ORDER_HEADERS, "Singing order");
+  var byEmail = {};
+  var byNumber = {};
+  var entries = [];
+  dataRows_(sheet).forEach(function (row) {
+    var email = cell_(row, map.email).toLowerCase();
+    var number = Number(cell_(row, map.number));
+    if (!email || byEmail[email] || number % 1 !== 0 || number < 1 || number > ORDER_SIZE || byNumber[number]) return;
+    var entry = { number: number, name: cell_(row, map.name), email: email, claimedAt: cell_(row, map.claimed_at) };
+    byEmail[email] = entry;
+    byNumber[number] = entry;
+    entries.push(entry);
+  });
+  return entries;
+}
+
+function orderPayload_(user, entries) {
+  var mine = entries.filter(function (entry) { return entry.email === user.email; })[0] || null;
+  return {
+    ok: true,
+    size: ORDER_SIZE,
+    mine: mine ? { number: mine.number, name: mine.name, claimedAt: mine.claimedAt } : null,
+    lineup: entries
+      .map(function (entry) { return { number: entry.number, name: entry.name }; })
+      .sort(function (a, b) { return a.number - b.number; }),
+    remaining: ORDER_SIZE - entries.length,
+  };
+}
+
+function orderState_(user) {
+  return orderPayload_(user, readOrder_());
+}
+
+function isOrderShuffle_(list) {
+  if (list.length !== ORDER_SIZE) return false;
+  var seen = {};
+  return list.every(function (number) {
+    if (number % 1 !== 0 || number < 1 || number > ORDER_SIZE || seen[number]) return false;
+    seen[number] = true;
+    return true;
+  });
+}
+
+// Shuffled once, then kept. To start over, clear ORDER_SHUFFLE and the Singing order rows. Caller holds the script lock.
+function orderShuffle_() {
+  var stored = readVariables_(true).ORDER_SHUFFLE || "";
+  var list = stored.split(",").map(function (item) { return Number(item.trim()); });
+  if (isOrderShuffle_(list)) return list;
+  list = [];
+  for (var number = 1; number <= ORDER_SIZE; number++) list.push(number);
+  for (var index = list.length - 1; index > 0; index--) {
+    var swap = randomIndex_(index + 1);
+    var held = list[index];
+    list[index] = list[swap];
+    list[swap] = held;
+  }
+  setVariables_({ ORDER_SHUFFLE: list.join(",") });
+  return list;
+}
+
+// Each signed-in account gets one number; asking again returns the same one.
+function claimOrder_(user, name) {
+  name = name.replace(/\s+/g, " ").trim();
+  if (!name) throw new Error("Enter your name.");
+  if (name.length > ORDER_NAME_MAX) throw new Error("Keep your name to " + ORDER_NAME_MAX + " characters.");
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
   try {
-    var rows = read();
-    return {
-      status: { label: label, url: "https://docs.google.com/spreadsheets/d/" + prop_(idProp) + "/edit", rows: rows.length, error: null },
-      rows: rows,
-    };
-  } catch (error) {
-    var id = "";
-    try { id = prop_(idProp); } catch (ignored) { id = ""; }
-    return {
-      status: {
-        label: label,
-        url: id ? "https://docs.google.com/spreadsheets/d/" + id + "/edit" : "",
-        rows: null,
-        error: error.message,
-      },
-      rows: null,
-    };
+    var entries = readOrder_();
+    var payload;
+    if (entries.some(function (entry) { return entry.email === user.email; })) {
+      payload = orderPayload_(user, entries);
+      payload.status = "already";
+      return payload;
+    }
+    var taken = {};
+    entries.forEach(function (entry) { taken[entry.number] = true; });
+    var number = orderShuffle_().filter(function (item) { return !taken[item]; })[0];
+    if (!number) {
+      payload = orderPayload_(user, entries);
+      payload.status = "full";
+      return payload;
+    }
+    var entry = { number: number, name: name, email: user.email, claimedAt: new Date().toISOString() };
+    var sheet = orderSheet_();
+    var map = ensureHeaders_(sheet, ORDER_HEADERS, "Singing order");
+    var row = new Array(sheet.getLastColumn()).fill("");
+    row[map.number - 1] = String(entry.number);
+    row[map.name - 1] = entry.name;
+    row[map.email - 1] = entry.email;
+    row[map.claimed_at - 1] = entry.claimedAt;
+    // Plain text, so a name like "=SUM(...)" is stored as typed rather than run as a formula.
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setNumberFormat("@").setValues([row]);
+    payload = orderPayload_(user, entries.concat([entry]));
+    payload.status = "claimed";
+    return payload;
+  } finally {
+    lock.releaseLock();
   }
 }
 
-function status_() {
+function orderAdminPayload_(entries) {
+  return {
+    ok: true,
+    size: ORDER_SIZE,
+    entries: entries.slice().sort(function (a, b) { return a.number - b.number; }),
+    remaining: ORDER_SIZE - entries.length,
+  };
+}
+
+function orderAdmin_() {
+  return orderAdminPayload_(readOrder_());
+}
+
+// Keeps the old claims: the tab is renamed rather than cleared, and the next claim starts a new tab and shuffle.
+function orderReset_() {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var spreadsheet = spreadsheet_("VARIABLES_SPREADSHEET_ID", "Variables");
+    var sheet = spreadsheet.getSheetByName(ORDER_SHEET);
+    if (sheet && sheet.getLastRow() > 1) {
+      var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+      sheet.setName(ORDER_SHEET + " (reset " + stamp + ")");
+    }
+    setVariables_({ ORDER_SHUFFLE: "" });
+    return orderAdminPayload_(readOrder_());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---------- Admin status ----------
+
+function sheetStatus_(label, idProp, read) {
+  var id = "";
+  try { id = prop_(idProp); } catch (ignored) { id = ""; }
+  var url = id ? "https://docs.google.com/spreadsheets/d/" + id + "/edit" : "";
+  try {
+    var rows = read();
+    return { status: { label: label, url: url, rows: rows.length, error: null }, rows: rows };
+  } catch (error) {
+    return { status: { label: label, url: url, rows: null, error: error.message }, rows: null };
+  }
+}
+
+function orDefault_(read, fallback) {
+  try { return read(); } catch (error) { return fallback; }
+}
+
+function status_(admin) {
   var problems = missingProps_();
   var account = "";
   try { account = Session.getEffectiveUser().getEmail(); } catch (error) { account = ""; }
+  var unscheduled = { opensAt: null, closesAt: null, phase: "unscheduled" };
   var base = {
     ok: true,
+    viewer: admin.email,
+    isOwner: isOwner_(admin.email),
+    admins: orDefault_(adminList_, { owner: OWNER_EMAIL, trusted: [] }),
     accountEmail: account,
-    gmailUser: account,
-    appUrl: null,
     problems: problems,
     sheets: null,
-    audienceCount: 0,
+    registeredCount: 0,
     singerCount: 0,
     voteCount: 0,
-    codesMissing: 0,
-    unsent: 0,
-    invalidEmails: [],
-    reachable: 0,
-    resend: null,
-    preview: { name: "Alex", link: "", vcode: SAMPLE_CODE },
+    drawCount: 0,
+    recentRegistrations: [],
+    checkin: orDefault_(function () { return windowState_("checkin"); }, unscheduled),
+    voting: orDefault_(function () { return windowState_("voting"); }, unscheduled),
   };
   if (problems.length) return base;
-  base.appUrl = appUrl_();
-  var audienceResult = sheetStatus_("Audience", "AUDIENCE_SPREADSHEET_ID", readAudience_);
-  var singersResult = sheetStatus_("Singers", "SINGERS_SPREADSHEET_ID", readSingers_);
-  var ballotsResult = sheetStatus_("Results", "RESULTS_SPREADSHEET_ID", readBallots_);
-  var audience = audienceResult.rows || [];
-  var voted = votedCodes_(ballotsResult.rows || []);
-  var previewRow = audience.filter(function (row) { return row.verificationCode && row.verificationHash; })[0] || audience[0];
-  base.sheets = { audience: audienceResult.status, singers: singersResult.status, results: ballotsResult.status };
-  base.audienceCount = audience.length;
-  base.singerCount = singersResult.rows ? singersResult.rows.length : 0;
-  base.voteCount = ballotsResult.rows ? winningBallots_(ballotsResult.rows).length : 0;
-  base.codesMissing = audience.filter(function (row) { return needsCode_(row, voted); }).length;
-  base.unsent = pending_(audience).length;
-  base.reachable = audience.filter(function (row) {
-    return row.verificationCode && row.verificationHash && isEmail_(row.email);
-  }).length;
-  var since = resendSince_();
-  if (since) base.resend = { since: since, remaining: pending_(audience, since).length };
-  base.invalidEmails = audience.filter(function (row) {
-    return !row.emailSentAt && (row.name || row.email) && !isEmail_(row.email);
-  }).map(function (row) { return { row: row.rowNumber, name: row.name, email: row.email }; });
-  var ready = previewRow && previewRow.verificationCode && previewRow.verificationHash;
-  base.preview = {
-    name: previewRow && previewRow.name ? previewRow.name : "Alex",
-    link: voteLink_(ready ? previewRow.verificationHash : "test-preview"),
-    vcode: ready ? previewRow.verificationCode : SAMPLE_CODE,
+  var registrations = sheetStatus_("Registrations", "REGISTRATIONS_SPREADSHEET_ID", readRegistrations_);
+  var singers = sheetStatus_("Singers", "SINGERS_SPREADSHEET_ID", readSingers_);
+  var ballots = sheetStatus_("Results", "RESULTS_SPREADSHEET_ID", readBallots_);
+  var variables = sheetStatus_("Variables", "VARIABLES_SPREADSHEET_ID", function () {
+    return Object.keys(readVariables_(true));
+  });
+  var draws = [];
+  try { draws = readDraws_(); } catch (error) { draws = []; }
+  base.sheets = {
+    registrations: registrations.status,
+    singers: singers.status,
+    results: ballots.status,
+    variables: variables.status,
   };
+  base.registeredCount = registrations.rows ? registrations.rows.length : 0;
+  base.singerCount = singers.rows ? singers.rows.length : 0;
+  base.voteCount = ballots.rows ? ballots.rows.length : 0;
+  base.drawCount = draws.length;
+  base.recentRegistrations = (registrations.rows || []).slice(-5).reverse();
   return base;
-}
-
-function votedCodes_(ballots) {
-  var voted = {};
-  winningBallots_(ballots).forEach(function (ballot) { voted[ballot.verificationCode] = true; });
-  return voted;
-}
-
-// Codes that were already used to vote are kept even if they predate the 6-character format.
-function needsCode_(row, voted) {
-  if (!row.name && !row.email) return false;
-  if (!row.verificationCode) return true;
-  if (!CODE_PATTERN.test(row.verificationCode) && !voted[row.verificationCode]) return true;
-  return !row.verificationHash;
-}
-
-function generateCodes_() {
-  var rows = readAudience_();
-  var voted = votedCodes_(readBallots_());
-  var used = {};
-  rows.forEach(function (row) { if (row.verificationCode) used[row.verificationCode] = true; });
-  var sheet = sheet_("AUDIENCE_SPREADSHEET_ID", "Audience");
-  var map = headerMap_(sheet);
-  var count = sheet.getLastRow() - 1;
-  if (count < 1) return 0;
-  var codeRange = sheet.getRange(2, map.verification_code, count, 1);
-  var hashRange = sheet.getRange(2, map.verification_hash, count, 1);
-  var codes = codeRange.getDisplayValues();
-  var hashes = hashRange.getDisplayValues();
-  var resetSent = [];
-  var changed = 0;
-  rows.forEach(function (row) {
-    if (!needsCode_(row, voted)) return;
-    var index = row.rowNumber - 2;
-    var code = row.verificationCode;
-    if (!code || (!CODE_PATTERN.test(code) && !voted[code])) {
-      // The old link no longer works, so this person needs a new email.
-      if (code && row.emailSentAt) resetSent.push(row.rowNumber);
-      do { code = randomCode_(); } while (used[code]);
-      used[code] = true;
-      codes[index][0] = code;
-    }
-    hashes[index][0] = hashCode_(code);
-    changed += 1;
-  });
-  if (!changed) return 0;
-  codeRange.setNumberFormat("@").setValues(codes);
-  hashRange.setNumberFormat("@").setValues(hashes);
-  resetSent.forEach(function (rowNumber) { setText_(sheet, rowNumber, map.email_sent_at, ""); });
-  return changed;
-}
-
-// With `since`, rows sent before that time are queued again for a resend.
-function pending_(audience, since) {
-  return audience.filter(function (row) {
-    if (!row.verificationCode || !row.verificationHash || !isEmail_(row.email)) return false;
-    if (since) return !row.emailSentAt || row.emailSentAt < since;
-    return !row.emailSentAt;
-  });
-}
-
-function resendSince_() {
-  return PropertiesService.getScriptProperties().getProperty("RESEND_SINCE") || "";
-}
-
-function resendStart_() {
-  var since = resendSince_();
-  if (!since) {
-    since = new Date().toISOString();
-    PropertiesService.getScriptProperties().setProperty("RESEND_SINCE", since);
-  }
-  return { ok: true, total: pending_(readAudience_(), since).length };
-}
-
-function resendCancel_() {
-  PropertiesService.getScriptProperties().deleteProperty("RESEND_SINCE");
-  return { ok: true };
-}
-
-function draftError_(subject, body) {
-  if (!String(subject || "").trim()) return "Add a subject line.";
-  if (String(subject).trim().length > 200) return "Keep the subject under 200 characters.";
-  if (String(body || "").indexOf("[link]") === -1) return "The message must include [link].";
-  if (String(body || "").length > 5000) return "Keep the message under 5000 characters.";
-  return "";
-}
-
-function render_(template, name, link, vcode) {
-  return String(template).split("[Name]").join(name).split("[link]").join(link).split("[vcode]").join(vcode);
-}
-
-function sendMail_(to, subject, text) {
-  var from = Session.getEffectiveUser().getEmail();
-  var body = Utilities.base64Encode(text, Utilities.Charset.UTF_8).replace(/.{76}/g, "$&\r\n");
-  var mime = [
-    "From: Supernova <" + from + ">",
-    "To: " + to,
-    "Subject: =?UTF-8?B?" + Utilities.base64Encode(subject, Utilities.Charset.UTF_8) + "?=",
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    body,
-  ].join("\r\n");
-  var response = UrlFetchApp.fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-    method: "post",
-    contentType: "application/json",
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    payload: JSON.stringify({ raw: Utilities.base64EncodeWebSafe(mime, Utilities.Charset.UTF_8) }),
-    muteHttpExceptions: true,
-  });
-  var code = response.getResponseCode();
-  if (code >= 200 && code < 300) return;
-  var detail = response.getContentText().slice(0, 300);
-  var error = new Error(detail || "Gmail rejected the message.");
-  error.halt = code === 429 || code === 403 || /quota|rate|limit|daily/i.test(detail);
-  throw error;
-}
-
-function testEmail_(subject, message) {
-  var problem = draftError_(subject, message);
-  if (problem) throw new Error(problem);
-  var link = voteLink_("test-preview");
-  sendMail_(Session.getEffectiveUser().getEmail(), render_(subject, "Alex", link, SAMPLE_CODE), render_(message, "Alex", link, SAMPLE_CODE));
-  return { ok: true };
-}
-
-function sendBatch_(subject, message, skipRows, mode) {
-  var problem = draftError_(subject, message);
-  if (problem) throw new Error(problem);
-  var since = "";
-  if (mode === "all") {
-    since = resendSince_();
-    if (!since) throw new Error("The resend was cancelled. Start it again.");
-  }
-  var skip = {};
-  (Array.isArray(skipRows) ? skipRows : []).forEach(function (row) { skip[Number(row)] = true; });
-  var audience = readAudience_();
-  var everyone = pending_(audience, since);
-  var queue = everyone.filter(function (row) { return !skip[row.rowNumber]; });
-  var batch = queue.slice(0, 8);
-  var failed = [];
-  var sentRows = [];
-  var halt = null;
-  batch.forEach(function (person, index) {
-    if (halt) return;
-    var link = voteLink_(person.verificationHash);
-    try {
-      sendMail_(
-        person.email,
-        render_(subject, person.name, link, person.verificationCode),
-        render_(message, person.name, link, person.verificationCode)
-      );
-      sentRows.push(person.rowNumber);
-    } catch (error) {
-      if (error.halt) halt = error.message;
-      else failed.push({ row: person.rowNumber, email: person.email, error: error.message });
-    }
-    if (!halt && index < batch.length - 1) Utilities.sleep(400);
-  });
-  if (sentRows.length) {
-    var target = sheet_("AUDIENCE_SPREADSHEET_ID", "Audience");
-    var column = headerMap_(target).email_sent_at;
-    var sentAt = new Date().toISOString();
-    sentRows.forEach(function (rowNumber) { setText_(target, rowNumber, column, sentAt); });
-  }
-  if (since && everyone.length === sentRows.length) resendCancel_();
-  return { ok: true, sent: sentRows.length, failed: failed, remaining: queue.length - sentRows.length, halt: halt };
 }

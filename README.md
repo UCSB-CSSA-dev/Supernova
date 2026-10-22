@@ -1,66 +1,120 @@
 # Supernova voting
 
-Audience members vote once from a personal email link. A projector on `/results` ranks the performances live.
+The audience checks in at the venue, votes later in the show, and is entered in a lucky draw. Everyone signs in with a `@ucsb.edu` Google account. A projector on `/result` ranks the performances live.
 
-GitHub Pages serves only the static site. Google Apps Script is the backend: it reads and writes the three spreadsheets and sends mail through the Gmail API as the Google account that owns the script.
+## Pages
 
-## 1. Apps Script
+| Page | Who can open it |
+| --- | --- |
+| `/result` | Everyone. Live ranking, with a "Scan to vote" QR in the bottom-right until voting closes |
+| `/login` | Everyone. Google sign-in, then back to the page you were trying to open |
+| `/check-in` | Signed in. Where the check-in QR lands |
+| `/vote` | Signed in. Only people who checked in can actually vote |
+| `/random-order` | Signed in. Performers enter their name and get a unique random singing number from 1 to 20 |
+| `/dashboard` | Signed in. Links to every page; admin links appear for admins |
+| `/admin`, `/admin/check-in`, `/admin/voting-qr`, `/admin/lottery` | Admins only |
+
+`/` sends signed-out visitors to `/result` and signed-in people to `/dashboard`. Signed-out visitors who open any other page are sent to `/login`. The site is static, so this blocking only affects what the browser shows. The real rules (who can check in, vote, or use admin actions) are enforced by Apps Script on every request.
+
+1. **Check in.** While check-in is open, `/admin/check-in` shows a QR code that changes every 30 seconds. Scanning it and signing in with Google records the person in the Registrations sheet. A code works for at most a minute, so a forwarded link or photo is useless to anyone who isn't in the room.
+2. **Vote.** `/vote` (or the QR on `/admin/voting-qr`) is the same for everyone. Only people who checked in can vote, once each, and only while voting is open. People who arrive before voting opens see a waiting screen that turns into the ballot when voting opens.
+3. **Lucky draw.** `/admin/lottery` draws one checked-in person at a time. Nobody can win twice. Every draw is saved to a `Lottery` tab in the Registrations spreadsheet.
+
+GitHub Pages serves only the static site. Google Apps Script is the backend: it verifies Google sign-ins, and reads and writes the spreadsheets as the Google account that owns the script. Nothing sends email.
+
+## 1. Google sign-in client
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), pick or create a project and configure the OAuth consent screen (External, app name "Supernova"). Only the default `email`, `profile`, and `openid` scopes are needed, so Google doesn't need to verify the app.
+2. Create credentials → **OAuth client ID** → **Web application**.
+3. Under **Authorized JavaScript origins**, add the site origin with no path, plus local origins for testing:
+   - `https://ucsb-cssa-dev.github.io` (or wherever the site is published)
+   - `http://localhost:3000`
+   - `http://localhost`
+4. Copy the client ID (it ends in `.apps.googleusercontent.com`). It's public, not a secret.
+
+Sign-in only accepts verified Google Workspace accounts whose address ends in `@ucsb.edu` (the token's `hd` claim must be `ucsb.edu`). A personal Google account registered with a ucsb.edu address is rejected.
+
+## 2. Apps Script
 
 1. Open [script.google.com](https://script.google.com) while signed in as the dedicated Supernova Google account and create a project.
 2. Replace the default `Code.gs` with `apps-script/Code.gs`.
 3. Open Project Settings, check **Show "appsscript.json" manifest file**, and replace that file with `apps-script/appsscript.json`.
-4. In the script editor, open the Google Cloud project link. If the default Apps Script project cannot enable APIs, switch to a standard Cloud project. Enable the **Google Sheets API** and the **Gmail API**.
-5. In Project Settings → Script properties, add:
+4. In Project Settings → Script properties, add:
 
    | Property | Value |
    | --- | --- |
-   | `AUDIENCE_SPREADSHEET_ID` | Audience spreadsheet id |
+   | `REGISTRATIONS_SPREADSHEET_ID` | Registrations spreadsheet id |
    | `SINGERS_SPREADSHEET_ID` | Singers spreadsheet id |
    | `RESULTS_SPREADSHEET_ID` | Results spreadsheet id |
-   | `ADMIN_PASSWORD` | Password for `/admin` |
-   | `APP_URL` | `https://james-guo-03.github.io/polling-app` |
+   | `VARIABLES_SPREADSHEET_ID` | Variables spreadsheet id |
+   | `GOOGLE_CLIENT_ID` | The OAuth client ID from step 1 |
 
-   `APP_URL` has no trailing slash. Vote links are `{APP_URL}/vote?code=…`. Set this to the public Pages URL before generating codes or sending mail. While testing locally, you can temporarily set it to `http://localhost:3000`.
+   There is no admin password. `jamesguo@ucsb.edu` (`OWNER_EMAIL` at the top of `Code.gs`) is always an admin and can add or remove trusted admin emails from the dashboard. Those are stored in the `ADMIN_EMAILS` row of the Variables sheet.
 
-6. Deploy → New deployment → Web app.
+   The script creates `SESSION_SECRET` on first use and keeps it in script properties. Deleting it signs everyone out.
+
+5. Deploy → New deployment → Web app.
    - Execute as: **Me**
    - Who has access: **Anyone**
-7. Authorize Sheets and Gmail when Google prompts. Copy the web app URL that ends in `/exec`.
+6. Authorize Sheets when Google prompts. Copy the web app URL that ends in `/exec`.
 
-The dedicated account must be able to edit Audience and Results. Singers can be view-only if that same account can read it. A consumer Gmail account can send about 500 messages per day. Send a small test before the full list of 300–400. The script sends through the Gmail API (`gmail.send`), not `MailApp`, so it is not limited to the 100-recipient Apps Script mail quota.
+If you're updating the older email-based deployment, use Deploy → Manage deployments → Edit → **New version** so the `/exec` URL stays the same, replace the old `AUDIENCE_SPREADSHEET_ID` with `REGISTRATIONS_SPREADSHEET_ID`, and delete `ADMIN_PASSWORD`. Point `RESULTS_SPREADSHEET_ID` at a fresh sheet so votes from the old system aren't counted.
 
 ## Spreadsheets
 
-Create three files on the same Google account:
+Create four files on the same Google account:
 
-- **Audience** with columns `Name` and `Email`. The script adds `verification_code` (6 characters, for the backup Google Form), `verification_hash` (used in the voting link), and `email_sent_at`.
+- **Variables** with columns `variable_name`, `value`, `created_at`. It can start with only the header row. The script keeps one row per variable and stamps `created_at` whenever a value is set:
+
+  | `variable_name` | Holds |
+  | --- | --- |
+  | `CHECKIN_OPENS_AT`, `CHECKIN_CLOSES_AT` | Check-in window (ISO times) |
+  | `VOTING_OPENS_AT`, `VOTING_CLOSES_AT` | Voting window (ISO times) |
+  | `ADMIN_EMAILS` | Trusted admin emails, comma-separated |
+  | `ORDER_SHUFFLE` | The shuffled numbers 1–20 for `/random-order`, created on the first claim |
+
+  `/random-order` saves claims (`number`, `name`, `email`, `claimed_at`) to a `Singing order` tab it adds to this spreadsheet. Each account gets the next unclaimed number from `ORDER_SHUFFLE`. Admins see the full list (with emails) under **4. Singing order** on `/admin`. **Reset** renames the tab to `Singing order (reset <time>)` so the old list is kept, and clears `ORDER_SHUFFLE`. The next claim then starts a new tab and a new shuffle.
+
+  Set these from `/admin`. Edits made directly in the sheet take effect within 5 seconds. An empty value means unset.
+- **Registrations** can start empty. The script writes `registered_at`, `email`, `name` on the first tab and keeps lottery draws (`drawn_at`, `round`, `email`, `name`) on a `Lottery` tab it creates.
 - **Singers** with columns `singer_name` and `song_name`.
-- **Results** can start empty. The script writes `voted_at`, `name`, `email`, `verification_code`, `singer_name`, `song_name`.
+- **Results** can start empty. The script writes `voted_at`, `name`, `email`, `singer_name`, `song_name`.
 
-## 2. Local frontend
+The script account must be able to edit Variables, Registrations, and Results. Singers can be view-only if that same account can read it. If the same person somehow appears twice (two phones at once), only their first row counts. To redo the lucky draw, delete rows from the `Lottery` tab.
+
+## 3. Local frontend
 
 ```bash
 npm install
 ```
 
-Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_APPS_SCRIPT_URL` to the `/exec` URL. Leave `NEXT_PUBLIC_BASE_PATH` empty.
+Copy `.env.example` to `.env.local`, set `NEXT_PUBLIC_APPS_SCRIPT_URL` to the `/exec` URL and `NEXT_PUBLIC_GOOGLE_CLIENT_ID` to the OAuth client ID. Leave `NEXT_PUBLIC_BASE_PATH` empty.
 
 ```bash
 npm run dev
 ```
 
-Open `/admin`, generate codes, preview the message, send a test to the script account, then send the audience. `[Name]`, `[link]`, and `[vcode]` are replaced per person. **Resend to all** emails everyone with a code again; if Gmail stops it partway, resume it from the same page.
+## Running the show
 
-The link hash is an HMAC of the code keyed by the `HASH_SECRET` script property, which the script creates the first time it generates codes. Do not change or delete it after links are sent.
+1. Open `/admin` and sign in with Google as the owner or a trusted admin. The owner can add other organizers under **Admins**.
+2. **Check-in:** set the opening and closing times, or press **Open now** when doors open. Put **Open check-in screen** on a projector or TV. The latest check-ins appear on the dashboard (press Refresh).
+3. **Voting:** set an opening time, or press **Open in 2 min** when it's almost time (announce it on the mic). Use **Open now** only if few people are waiting. Show **Full-screen QR** or share the link. Open `/result` on the main projector; its corner QR also opens the ballot.
+4. **Lucky draw:** open the lottery screen and press **Draw** (or space) once per prize.
 
-## 3. GitHub Pages
+A sign-in lasts 12 hours and is shared across tabs, so the check-in screen, lottery, and dashboard can run side by side. Admin access is checked on every request, so removing someone from the list locks them out right away.
 
-The site is a project page, so the public path is `/polling-app`.
+## 4. GitHub Pages
+
+The site is a project page, published under the repository name (for example `https://ucsb-cssa-dev.github.io/supernova`).
 
 1. In the GitHub repo, Settings → Pages → Build and deployment → Source: **GitHub Actions**.
-2. Settings → Secrets and variables → Actions → Variables: add `APPS_SCRIPT_URL` with the same `/exec` URL. The URL is public; it does not belong in a secret.
+2. Settings → Secrets and variables → Actions → Variables: add `APPS_SCRIPT_URL` (the `/exec` URL) and `GOOGLE_CLIENT_ID`. Both are public, so they don't belong in secrets.
 3. Push `main`. The workflow in `.github/workflows/pages.yml` builds the static export and publishes `out/`.
 
-Do not put the admin password, spreadsheet contents, or any Google credential in the repository. Those stay in Apps Script properties.
+Do not put spreadsheet contents or any Google credential in the repository. Those stay in Apps Script properties.
 
-The results screen asks Google for new counts once a second, waiting for each answer before asking again, and the status light flashes green on every successful sync. Apps Script caches the counts for 1 second and drops the cache when a vote is saved. Each round trip to Apps Script usually takes about a second, so expect updates every 1–2 seconds. Open `/results` for the show rather than leaving it running all day.
+## Load
+
+Apps Script runs only about 30 requests at a time. Check-in and voting can safely be retried, and the site retries them automatically when Google is busy.
+
+Phones waiting for voting check back about once a minute, spread out. Once voting is scheduled, they receive the ballot in advance, show a countdown, and open it by themselves at the scheduled time without asking Google. The script still rejects votes that arrive before the opening time. That's why **Open in 2 min** is safer than **Open now**: with Open now, waiting phones only notice on their next check, up to a minute later. The results screen asks for new counts once a second. Each round trip usually takes about a second, so expect updates every 1–2 seconds.

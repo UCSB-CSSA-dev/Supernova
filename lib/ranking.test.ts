@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  duplicateBallotRows,
   rankCandidates,
   splitRanking,
   winningBallots,
@@ -31,22 +30,48 @@ test("ranks by votes, then singer name", () => {
   );
 });
 
+test("tied candidates share a place and the next place is skipped", () => {
+  const ranked = rankCandidates(
+    [
+      { singerName: "Nova", songName: "Night" },
+      { singerName: "Aria", songName: "Gold" },
+      { singerName: "Bea", songName: "Dawn" },
+      { singerName: "Cy", songName: "Rain" },
+    ],
+    [
+      { singerName: "Nova", songName: "Night" },
+      { singerName: "Aria", songName: "Gold" },
+      { singerName: "Bea", songName: "Dawn" },
+    ],
+  );
+
+  assert.deepEqual(
+    ranked.map((choice) => [choice.place, choice.singerName]),
+    [
+      [1, "Aria"],
+      [1, "Bea"],
+      [1, "Nova"],
+      [4, "Cy"],
+    ],
+  );
+});
+
 test("splits the top half onto the featured board", () => {
   const { featured, rest } = splitRanking([1, 2, 3, 4, 5]);
   assert.deepEqual(featured, [1, 2, 3]);
   assert.deepEqual(rest, [4, 5]);
 });
 
-test("keeps the earliest ballot when a code is duplicated", () => {
+test("keeps the first ballot from each email", () => {
   const ballots = [
-    { verificationCode: "a", votedAt: "2026-10-13T02:00:00.000Z", rowNumber: 3, singerName: "Late" },
-    { verificationCode: "a", votedAt: "2026-10-13T01:00:00.000Z", rowNumber: 2, singerName: "Early" },
-    { verificationCode: "b", votedAt: "2026-10-13T01:00:00.000Z", rowNumber: 4, singerName: "Only" },
+    { email: "a@ucsb.edu", rowNumber: 3, singerName: "Late" },
+    { email: "A@ucsb.edu", rowNumber: 2, singerName: "Early" },
+    { email: "b@ucsb.edu", rowNumber: 4, singerName: "Only" },
+    { email: "", rowNumber: 5, singerName: "Blank" },
   ];
 
   assert.deepEqual(
     winningBallots(ballots).map((ballot) => ballot.singerName),
     ["Early", "Only"],
   );
-  assert.deepEqual(duplicateBallotRows(ballots), [3]);
 });

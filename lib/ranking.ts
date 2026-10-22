@@ -9,8 +9,7 @@ export type RankedChoice = Choice & {
 };
 
 export type BallotIdentity = {
-  verificationCode: string;
-  votedAt: string;
+  email: string;
   rowNumber: number;
 };
 
@@ -39,7 +38,16 @@ export function rankCandidates(singers: Choice[], ballots: Choice[]): RankedChoi
       left.songName.localeCompare(right.songName),
   );
 
-  return ranked.map((choice, index) => ({ ...choice, place: index + 1 }));
+  return sharePlaces(ranked);
+}
+
+// Expects choices sorted by votes, highest first. Ties share a place: 1, 1, 3.
+export function sharePlaces<T extends { votes: number }>(sorted: T[]): (T & { place: number })[] {
+  let place = 0;
+  return sorted.map((choice, index) => {
+    if (index === 0 || choice.votes !== sorted[index - 1].votes) place = index + 1;
+    return { ...choice, place };
+  });
 }
 
 export function splitRanking<T>(ranked: T[]): { featured: T[]; rest: T[] } {
@@ -50,29 +58,14 @@ export function splitRanking<T>(ranked: T[]): { featured: T[]; rest: T[] } {
   };
 }
 
-function isEarlierBallot(candidate: BallotIdentity, current: BallotIdentity): boolean {
-  if (candidate.votedAt !== current.votedAt) return candidate.votedAt < current.votedAt;
-  return candidate.rowNumber < current.rowNumber;
-}
-
+// Mirrors readBallots_ in Code.gs: the first row from each email is the vote that counts.
 export function winningBallots<T extends BallotIdentity>(ballots: T[]): T[] {
   const winners = new Map<string, T>();
   for (const ballot of ballots) {
-    if (!ballot.verificationCode) continue;
-    const current = winners.get(ballot.verificationCode);
-    if (!current || isEarlierBallot(ballot, current)) winners.set(ballot.verificationCode, ballot);
+    const email = ballot.email.trim().toLowerCase();
+    if (!email) continue;
+    const current = winners.get(email);
+    if (!current || ballot.rowNumber < current.rowNumber) winners.set(email, ballot);
   }
-  return [...winners.values()];
-}
-
-export function duplicateBallotRows<T extends BallotIdentity>(ballots: T[]): number[] {
-  const winnerRows = new Map(
-    winningBallots(ballots).map((ballot) => [ballot.verificationCode, ballot.rowNumber]),
-  );
-  return ballots
-    .filter((ballot) => {
-      const winner = winnerRows.get(ballot.verificationCode);
-      return winner !== undefined && winner !== ballot.rowNumber;
-    })
-    .map((ballot) => ballot.rowNumber);
+  return [...winners.values()].sort((left, right) => left.rowNumber - right.rowNumber);
 }

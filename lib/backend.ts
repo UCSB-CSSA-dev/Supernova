@@ -1,14 +1,33 @@
-import type { AdminStatus, PublicResults, SendBatchResult, SendMode, VoteState } from "@/lib/types";
-
-const TOKEN_KEY = "supernova-admin-token";
+import { forgetGoogleAccount } from "@/lib/google";
+import { clearSession, getSession, saveSession } from "@/lib/session";
+import type {
+  AdminList,
+  AdminStatus,
+  CheckinCode,
+  CheckinTicketResult,
+  LotteryState,
+  Me,
+  OrderAdminState,
+  OrderClaim,
+  OrderState,
+  PublicResults,
+  RegisterResult,
+  TimeWindow,
+  UserSession,
+  VoteResult,
+  VoteState,
+  WindowName,
+} from "@/lib/types";
 
 export class BackendError extends Error {
   unauthenticated: boolean;
+  signedOut: boolean;
 
-  constructor(message: string, unauthenticated = false) {
+  constructor(message: string, options: { unauthenticated?: boolean; signedOut?: boolean } = {}) {
     super(message);
     this.name = "BackendError";
-    this.unauthenticated = unauthenticated;
+    this.unauthenticated = Boolean(options.unauthenticated);
+    this.signedOut = Boolean(options.signedOut);
   }
 }
 
@@ -20,9 +39,22 @@ function endpoint(): string {
   return url;
 }
 
-type Payload = Record<string, unknown> & { ok?: boolean; error?: string; unauthenticated?: boolean };
+type Payload = Record<string, unknown> & {
+  ok?: boolean;
+  error?: string;
+  unauthenticated?: boolean;
+  signedOut?: boolean;
+};
 
-async function call<T>(payload: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+type CallOptions = {
+  timeoutMs?: number;
+  // Only for requests that are safe to repeat; Apps Script drops requests when hundreds arrive at once.
+  retries?: number;
+};
+
+class TransientError extends Error {}
+
+async function request(payload: Record<string, unknown>, timeoutMs?: number): Promise<Payload> {
   let response: Response;
   try {
     response = await fetch(endpoint(), {
@@ -35,94 +67,142 @@ async function call<T>(payload: Record<string, unknown>, timeoutMs?: number): Pr
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new BackendError("Google took too long to answer.");
+      throw new TransientError("Google took too long to answer.");
     }
-    throw error;
+    if (error instanceof BackendError) throw error;
+    throw new TransientError("Could not reach Google. Check your connection.");
   }
   const text = await response.text();
-  let body: Payload;
   try {
-    body = JSON.parse(text) as Payload;
-  } catch {
-    throw new BackendError("Google Apps Script did not return JSON. Redeploy the web app and use its /exec URL.");
+    const body = JSON.parse(text) as Payload;
+    if (!body || typeof body !== "object") throw new TransientError("Empty response from Google.");
+    return body;
+  } catch (error) {
+    if (error instanceof TransientError) throw error;
+    throw new TransientError("Google is busy right now. Try again in a moment.");
   }
-  if (!body || typeof body !== "object") throw new BackendError("Empty response from Google.");
-  if (body.unauthenticated) throw new BackendError(body.error || "Not authenticated", true);
-  if (body.ok === false && body.error && body.error !== "used" && body.error !== "invalid" && body.error !== "unknown-choice") {
-    throw new BackendError(body.error);
+}
+
+async function call<T>(payload: Record<string, unknown>, options: CallOptions = {}): Promise<T> {
+  const retries = options.retries ?? 0;
+  let body: Payload | null = null;
+  for (let attempt = 0; body === null; attempt += 1) {
+    try {
+      body = await request(payload, options.timeoutMs);
+    } catch (error) {
+      if (!(error instanceof TransientError)) throw error;
+      if (attempt >= retries) throw new BackendError(error.message);
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1) + Math.random() * 600));
+    }
   }
+  if (body.signedOut) {
+    clearSession();
+    throw new BackendError(body.error || "Your sign-in expired. Sign in again.", { signedOut: true });
+  }
+  if (body.unauthenticated) throw new BackendError(body.error || "Not authenticated", { unauthenticated: true });
+  if (body.ok === false) throw new BackendError(body.error || "Something went wrong.");
   return body as T;
 }
 
-export function adminToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.sessionStorage.getItem(TOKEN_KEY) ?? "";
-}
-
-export function saveAdminToken(token: string): void {
-  window.sessionStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearAdminToken(): void {
-  window.sessionStorage.removeItem(TOKEN_KEY);
-}
+// ---------- Audience ----------
 
 // The results board waits for each answer before asking again, so a stalled request must not hang forever.
 export function fetchResults(): Promise<PublicResults> {
-  return call<PublicResults>({ action: "results" }, 15000);
+  return call<PublicResults>({ action: "results" }, { timeoutMs: 15000 });
 }
 
-export function fetchVoteState(code: string): Promise<VoteState & { ok?: boolean; error?: string }> {
-  return call({ action: "voteState", code });
+export async function signIn(credential: string): Promise<UserSession> {
+  const body = await call<{ session: string; email: string; name: string; expiresAt: number }>(
+    { action: "signIn", credential },
+    { retries: 2 },
+  );
+  const session = { token: body.session, email: body.email, name: body.name, expiresAt: body.expiresAt };
+  saveSession(session);
+  return session;
 }
 
-export function castVote(code: string, singerName: string, songName: string): Promise<{
-  ok?: boolean;
-  error?: string;
-  singerName?: string;
-  songName?: string;
-}> {
-  return call({ action: "vote", code, singerName, songName });
+export function fetchCheckinTicket(code: string): Promise<CheckinTicketResult> {
+  return call({ action: "checkinTicket", code }, { retries: 2 });
 }
 
-export async function login(password: string): Promise<void> {
-  const body = await call<{ ok?: boolean; token?: string; error?: string }>({ action: "login", password });
-  if (!body.token) throw new BackendError(body.error || "Wrong password.");
-  saveAdminToken(body.token);
+export function fetchMe(session: string): Promise<Me> {
+  return call({ action: "me", session }, { retries: 2 });
 }
 
-export async function logout(): Promise<void> {
-  const token = adminToken();
-  clearAdminToken();
-  if (!token) return;
-  await call({ action: "logout", token }).catch(() => undefined);
+export function register(session: string, ticket: string): Promise<RegisterResult> {
+  return call({ action: "register", session, ticket }, { retries: 3 });
+}
+
+export function fetchVoteState(session: string): Promise<VoteState> {
+  return call({ action: "voteState", session }, { retries: 2 });
+}
+
+export function castVote(session: string, singerName: string, songName: string): Promise<VoteResult> {
+  return call({ action: "vote", session, singerName, songName }, { retries: 3 });
+}
+
+export function fetchOrderState(session: string): Promise<OrderState> {
+  return call({ action: "orderState", session }, { retries: 2 });
+}
+
+// Safe to retry: the script gives each account one number and returns it again on repeat requests.
+export function claimOrder(session: string, name: string): Promise<OrderClaim> {
+  return call({ action: "claimOrder", session, name }, { timeoutMs: 30000, retries: 2 });
+}
+
+// ---------- Admin ----------
+
+// Admins sign in with the same Google session as the audience; the script checks the email on every request.
+function adminSession(): string {
+  return getSession()?.token ?? "";
+}
+
+export function signOut(): void {
+  forgetGoogleAccount();
+  clearSession();
+}
+
+export function checkAdmin(): Promise<{ email: string; isOwner: boolean }> {
+  return call({ action: "adminCheck", session: adminSession() }, { retries: 1 });
 }
 
 export function fetchAdminStatus(): Promise<AdminStatus> {
-  return call<AdminStatus>({ action: "status", token: adminToken() });
+  return call<AdminStatus>({ action: "status", session: adminSession() });
 }
 
-export function generateCodes(): Promise<{ created: number }> {
-  return call({ action: "codes", token: adminToken() });
+export async function addAdmin(email: string): Promise<AdminList> {
+  const body = await call<{ admins: AdminList }>({ action: "addAdmin", session: adminSession(), email });
+  return body.admins;
 }
 
-export function sendTestEmail(subject: string, message: string): Promise<{ ok: boolean }> {
-  return call({ action: "testEmail", token: adminToken(), subject, message });
+export async function removeAdmin(email: string): Promise<AdminList> {
+  const body = await call<{ admins: AdminList }>({ action: "removeAdmin", session: adminSession(), email });
+  return body.admins;
 }
 
-export function sendBatch(
-  subject: string,
-  message: string,
-  skipRows: number[],
-  mode: SendMode,
-): Promise<SendBatchResult> {
-  return call({ action: "send", token: adminToken(), subject, message, skipRows, mode });
+export async function setWindow(name: WindowName, opensAt: string | null, closesAt: string | null): Promise<TimeWindow> {
+  const body = await call<{ window: TimeWindow }>({ action: "setWindow", session: adminSession(), name, opensAt, closesAt });
+  return body.window;
 }
 
-export function startResend(): Promise<{ total: number }> {
-  return call({ action: "resendStart", token: adminToken() });
+export function fetchCheckinCode(): Promise<CheckinCode> {
+  return call({ action: "checkinCode", session: adminSession() }, { timeoutMs: 15000, retries: 1 });
 }
 
-export function cancelResend(): Promise<{ ok: boolean }> {
-  return call({ action: "resendCancel", token: adminToken() });
+export function fetchLotteryState(): Promise<LotteryState> {
+  return call({ action: "lotteryState", session: adminSession() }, { retries: 1 });
+}
+
+export function fetchOrderAdmin(): Promise<OrderAdminState> {
+  return call({ action: "orderAdmin", session: adminSession() }, { retries: 1 });
+}
+
+// Never retried: a repeated request could archive claims made right after the first reset.
+export function resetOrder(): Promise<OrderAdminState> {
+  return call({ action: "orderReset", session: adminSession() }, { timeoutMs: 30000 });
+}
+
+// Never retried: a repeated request would draw a second winner.
+export function drawLottery(): Promise<LotteryState & { winner: NonNullable<LotteryState["winner"]> }> {
+  return call({ action: "lotteryDraw", session: adminSession() }, { timeoutMs: 30000 });
 }

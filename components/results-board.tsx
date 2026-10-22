@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { AnimatePresence, LayoutGroup, MotionConfig, animate, motion, useMotionValue, useTransform } from "motion/react";
 import { Crown } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { Backdrop } from "@/components/backdrop";
 import { fetchResults } from "@/lib/backend";
-import { choiceKey, type RankedChoice } from "@/lib/ranking";
+import { choiceKey, sharePlaces, type RankedChoice } from "@/lib/ranking";
 import { diffRankings } from "@/lib/results-diff";
 import type { PublicResults } from "@/lib/types";
+import { useAppUrl } from "@/lib/urls";
 import { cn } from "@/lib/utils";
 
 const FEATURED = 5;
@@ -117,10 +120,13 @@ export function ResultsBoard() {
     };
   }, []);
 
-  const ranked = results?.ranked ?? [];
+  const ranked = useMemo(() => sharePlaces(results?.ranked ?? []), [results]);
   const featured = ranked.slice(0, FEATURED);
   const rest = ranked.slice(FEATURED);
   const topVotes = Math.max(1, featured[0]?.votes ?? 0);
+  const voteUrl = useAppUrl("/vote");
+  const showVoteQr = Boolean(voteUrl) && results?.voting?.phase !== "closed";
+  const sideColumn = rest.length > 0 || showVoteQr;
 
   return (
     <MotionConfig reducedMotion="user">
@@ -189,7 +195,7 @@ export function ResultsBoard() {
         {featured.length > 0 ? (
           <div
             className="grid min-h-0 flex-1 gap-[2.5vw]"
-            style={{ gridTemplateColumns: rest.length > 0 ? "minmax(0, 1fr) minmax(15rem, 22vw)" : "minmax(0, 1fr)" }}
+            style={{ gridTemplateColumns: sideColumn ? "minmax(0, 1fr) minmax(15rem, 22vw)" : "minmax(0, 1fr)" }}
           >
             <LayoutGroup>
               <section className="relative flex min-h-0 items-stretch gap-[1.6vw] perspective-[1400px]">
@@ -211,7 +217,16 @@ export function ResultsBoard() {
               </section>
             </LayoutGroup>
 
-            {rest.length > 0 ? <RestList rest={rest} gains={gains} /> : null}
+            {sideColumn ? (
+              <div className="flex min-h-0 flex-col gap-[2vh]">
+                {rest.length > 0 ? <RestList rest={rest} gains={gains} /> : null}
+                {showVoteQr ? <VoteQr url={voteUrl} /> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : showVoteQr ? (
+          <div className="mt-auto self-end">
+            <VoteQr url={voteUrl} />
           </div>
         ) : null}
       </main>
@@ -351,7 +366,7 @@ function Impact() {
 
 function RestList({ rest, gains }: { rest: RankedChoice[]; gains: Gain[] }) {
   return (
-    <aside className="flex max-h-full min-h-0 flex-col self-start rounded-2xl border border-white/8 bg-white/3 p-[1.2vw] backdrop-blur-sm">
+    <aside className="flex min-h-0 shrink flex-col rounded-2xl border border-white/8 bg-white/3 p-[1.2vw] backdrop-blur-sm">
       <p className="text-xs tracking-[0.3em] text-muted-foreground uppercase">Also in the running</p>
       <ul className="relative mt-[1.2vh] min-h-0 flex-1 space-y-[0.4vh] overflow-hidden">
         <AnimatePresence initial={false} mode="popLayout">
@@ -390,6 +405,23 @@ function RestList({ rest, gains }: { rest: RankedChoice[]; gains: Gain[] }) {
           })}
         </AnimatePresence>
       </ul>
+    </aside>
+  );
+}
+
+function VoteQr({ url }: { url: string }) {
+  return (
+    <aside
+      aria-label="Scan to vote"
+      className="mt-auto flex shrink-0 items-center gap-[1vw] self-end rounded-2xl border border-white/10 bg-black/45 p-[0.8vw] backdrop-blur"
+    >
+      <div className="text-right">
+        <p className="font-heading text-[clamp(1rem,2.4vh,1.6rem)] leading-tight font-semibold">Scan to vote</p>
+        <p className="mt-1 text-[clamp(0.7rem,1.4vh,0.95rem)] text-muted-foreground">Checked-in audience only</p>
+      </div>
+      <div className="rounded-xl bg-white p-[0.6vh]">
+        <QRCodeSVG value={url} size={256} level="M" style={{ width: "min(14vw, 24vh)", height: "min(14vw, 24vh)" }} />
+      </div>
     </aside>
   );
 }
@@ -442,17 +474,4 @@ function AnimatedNumber({ value }: { value: number }) {
     return () => controls.stop();
   }, [count, value]);
   return <motion.span>{text}</motion.span>;
-}
-
-function Backdrop() {
-  return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-      <div className="sn-aurora sn-aurora-a" />
-      <div className="sn-aurora sn-aurora-b" />
-      <div className="sn-aurora sn-aurora-c" />
-      <div className="sn-stars" />
-      <div className="sn-stars sn-stars-slow" />
-      <div className="absolute inset-x-0 bottom-0 h-1/3 bg-linear-to-t from-background to-transparent" />
-    </div>
-  );
 }
