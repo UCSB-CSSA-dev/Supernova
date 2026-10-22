@@ -141,9 +141,9 @@ export function AdminDashboard() {
             <CardHeader>
               <CardTitle>1. Check-in</CardTitle>
               <CardDescription>
-                People check in by scanning the code on the check-in screen with a @ucsb.edu Google account. The code
-                changes every 30 seconds and only works while check-in is open, so a forwarded link stops working
-                within a minute.
+                While check-in is open, anyone who opens the check-in page with a @ucsb.edu Google account is checked
+                in. Put the check-in screen on a projector so people can scan its QR code. People who open the page
+                early are checked in automatically when it opens.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">

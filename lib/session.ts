@@ -2,8 +2,6 @@ import { useSyncExternalStore } from "react";
 import type { UserSession } from "@/lib/types";
 
 const SESSION_KEY = "supernova-session";
-const TICKET_KEY = "supernova-checkin-ticket";
-
 const listeners = new Set<() => void>();
 let cachedRaw: string | null = null;
 let cachedSession: UserSession | null = null;
@@ -63,22 +61,4 @@ function subscribe(listener: () => void): () => void {
 
 export function useSession(): UserSession | null {
   return useSyncExternalStore(subscribe, getSession, () => null);
-}
-
-export function readTicket(): string | null {
-  try {
-    const value = JSON.parse(window.sessionStorage.getItem(TICKET_KEY) ?? "null") as { ticket: string; expiresAt: number } | null;
-    if (!value || value.expiresAt <= Date.now()) return null;
-    return value.ticket;
-  } catch {
-    return null;
-  }
-}
-
-export function saveTicket(ticket: string, expiresAt: number): void {
-  window.sessionStorage.setItem(TICKET_KEY, JSON.stringify({ ticket, expiresAt }));
-}
-
-export function clearTicket(): void {
-  window.sessionStorage.removeItem(TICKET_KEY);
 }

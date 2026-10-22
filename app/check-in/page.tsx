@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Suspense } from "react";
 import { CheckinPage } from "@/components/register-screen";
 
 export const metadata: Metadata = {
@@ -7,9 +6,5 @@ export const metadata: Metadata = {
 };
 
 export default function CheckInPage() {
-  return (
-    <Suspense fallback={<main className="min-h-dvh" />}>
-      <CheckinPage />
-    </Suspense>
-  );
+  return <CheckinPage />;
 }

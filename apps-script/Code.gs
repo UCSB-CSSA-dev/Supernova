@@ -14,10 +14,6 @@ var ORDER_NAME_MAX = 40;
 var VARIABLE_HEADERS = ["variable_name", "value", "created_at"];
 // Hand edits to the Variables sheet take effect within this long; dashboard changes apply immediately.
 var VARIABLES_CACHE_SECONDS = 5;
-// The check-in QR changes every slot; a scan is accepted for the current and the previous slot.
-var CHECKIN_SLOT_MS = 30000;
-// Time a scanned check-in has to finish Google sign-in.
-var TICKET_MS = 10 * 60 * 1000;
 var SESSION_MS = 12 * 60 * 60 * 1000;
 var WINDOWS = { checkin: "CHECKIN", voting: "VOTING" };
 var REQUIRED_PROPS = [
@@ -51,9 +47,8 @@ function handle_(data) {
     var action = String(data.action || "");
     if (action === "results") return results_();
     if (action === "signIn") return signIn_(String(data.credential || ""));
-    if (action === "checkinTicket") return checkinTicket_(String(data.code || ""));
     if (action === "me") return me_(requireUser_(data.session));
-    if (action === "register") return register_(requireUser_(data.session), String(data.ticket || ""));
+    if (action === "register") return register_(requireUser_(data.session));
     if (action === "voteState") return voteState_(requireUser_(data.session));
     if (action === "vote") return castVote_(requireUser_(data.session), String(data.singerName || ""), String(data.songName || ""));
     if (action === "orderState") return orderState_(requireUser_(data.session));
@@ -64,7 +59,7 @@ function handle_(data) {
     if (action === "addAdmin") return addAdmin_(admin, String(data.email || ""));
     if (action === "removeAdmin") return removeAdmin_(admin, String(data.email || ""));
     if (action === "setWindow") return setWindow_(String(data.name || ""), data.opensAt, data.closesAt);
-    if (action === "checkinCode") return checkinCode_();
+    if (action === "checkinStatus") return checkinStatus_();
     if (action === "lotteryState") return lotteryState_();
     if (action === "lotteryDraw") return lotteryDraw_();
     if (action === "orderAdmin") return orderAdmin_();
@@ -161,7 +156,7 @@ function prop_(name) {
   return String(value).trim();
 }
 
-// Deleting SESSION_SECRET signs everyone out and voids outstanding check-in tickets.
+// Deleting SESSION_SECRET signs everyone out.
 function secret_() {
   var props = PropertiesService.getScriptProperties();
   var secret = props.getProperty("SESSION_SECRET");
@@ -290,35 +285,8 @@ function setWindow_(name, opensAt, closesAt) {
   return { ok: true, window: windowState_(name) };
 }
 
-function checkinSlotCode_(slot) {
-  return hmac_("checkin:" + slot).slice(0, 16);
-}
-
-function checkinCode_() {
-  var win = windowState_("checkin");
-  var now = Date.now();
-  var slot = Math.floor(now / CHECKIN_SLOT_MS);
-  return {
-    ok: true,
-    window: win,
-    code: win.phase === "open" ? checkinSlotCode_(slot) : null,
-    refreshInMs: (slot + 1) * CHECKIN_SLOT_MS - now,
-    slotMs: CHECKIN_SLOT_MS,
-    registeredCount: readRegistrations_().length,
-  };
-}
-
-// Trades a freshly scanned code for a ticket, so the person has time to sign in after the code rotates.
-function checkinTicket_(code) {
-  var win = windowState_("checkin");
-  if (win.phase !== "open") return { ok: true, status: "closed", window: win };
-  var slot = Math.floor(Date.now() / CHECKIN_SLOT_MS);
-  code = String(code || "").trim();
-  if (!code || (code !== checkinSlotCode_(slot) && code !== checkinSlotCode_(slot - 1))) {
-    return { ok: true, status: "expired" };
-  }
-  var expiresAt = Date.now() + TICKET_MS;
-  return { ok: true, status: "ok", ticket: sign_({ t: "ticket", x: expiresAt }), expiresAt: expiresAt };
+function checkinStatus_() {
+  return { ok: true, window: windowState_("checkin"), registeredCount: readRegistrations_().length };
 }
 
 // ---------- Spreadsheets ----------
@@ -528,15 +496,19 @@ function me_(user) {
   };
 }
 
-function register_(user, ticket) {
+// Anyone signed in with a @ucsb.edu account who opens the check-in page while check-in is open is checked in.
+function register_(user) {
   var existing = findRegistration_(user.email);
-  if (existing) return { ok: true, status: "registered", registeredAt: existing.registeredAt, already: true };
-  if (!verify_(ticket, "ticket")) return { ok: true, status: "expired" };
+  if (existing) {
+    return { ok: true, status: "registered", registeredAt: existing.registeredAt, already: true, voting: windowState_("voting") };
+  }
+  var win = windowState_("checkin");
+  if (win.phase !== "open") return { ok: true, status: "closed", window: win };
   var sheet = registrationsSheet_();
   var map = ensureHeaders_(sheet, REGISTRATION_HEADERS, "Registrations");
   var registeredAt = new Date().toISOString();
   appendRecord_(sheet, map, { registered_at: registeredAt, email: user.email, name: user.name });
-  return { ok: true, status: "registered", registeredAt: registeredAt, already: false };
+  return { ok: true, status: "registered", registeredAt: registeredAt, already: false, voting: windowState_("voting") };
 }
 
 // Once voting is scheduled, phones get the ballot early and open it on their own at opensAt,

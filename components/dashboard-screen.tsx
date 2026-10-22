@@ -12,7 +12,7 @@ import type { UserSession } from "@/lib/types";
 type Destination = { href: string; title: string; description: string; icon: ComponentType<{ className?: string }> };
 
 const AUDIENCE: Destination[] = [
-  { href: "/check-in", title: "Check in", description: "Scan the code on screen at the venue to check in.", icon: ScanLine },
+  { href: "/check-in", title: "Check in", description: "Check in while check-in is open.", icon: ScanLine },
   { href: "/vote", title: "Vote", description: "Vote for your favorite performance once voting opens.", icon: Vote },
   { href: "/result", title: "Results", description: "Live ranking of the performances.", icon: BarChart3 },
   { href: "/random-order", title: "Singing order", description: "Performers: get your random spot in the lineup.", icon: Mic },
@@ -20,7 +20,7 @@ const AUDIENCE: Destination[] = [
 
 const ADMIN: Destination[] = [
   { href: "/admin", title: "Admin", description: "Check-in and voting times, admins, and sheet status.", icon: Settings },
-  { href: "/admin/check-in", title: "Check-in screen", description: "Rotating check-in QR for the projector.", icon: QrCode },
+  { href: "/admin/check-in", title: "Check-in screen", description: "Check-in QR and live count for the projector.", icon: QrCode },
   { href: "/admin/voting-qr", title: "Voting QR", description: "Full-screen QR that opens the ballot.", icon: Vote },
   { href: "/admin/lottery", title: "Lucky draw", description: "Draw winners from everyone who checked in.", icon: Gift },
 ];

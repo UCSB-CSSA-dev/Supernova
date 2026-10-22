@@ -33,14 +33,9 @@ export type Me = {
   voting: TimeWindow;
 };
 
-export type CheckinTicketResult =
-  | { status: "ok"; ticket: string; expiresAt: number }
-  | { status: "expired" }
-  | { status: "closed"; window: TimeWindow };
-
 export type RegisterResult =
-  | { status: "registered"; registeredAt: string; already: boolean }
-  | { status: "expired" };
+  | { status: "registered"; registeredAt: string; already: boolean; voting: TimeWindow }
+  | { status: "closed"; window: TimeWindow };
 
 export type NotOpen = {
   status: "notOpen";
@@ -63,11 +58,8 @@ export type VoteResult =
   | NotOpen
   | { status: "unknownChoice" };
 
-export type CheckinCode = {
+export type CheckinStatus = {
   window: TimeWindow;
-  code: string | null;
-  refreshInMs: number;
-  slotMs: number;
   registeredCount: number;
 };
 

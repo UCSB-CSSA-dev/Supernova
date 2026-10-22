@@ -24,14 +24,7 @@ function GateMessage({ children }: { children: ReactNode }) {
 
 // Hides a page from signed-out visitors and sends them to /login. This only shapes the UI;
 // the Apps Script checks the session on every request.
-export function AuthGate({
-  children,
-  prepare,
-}: {
-  children: (session: UserSession) => ReactNode;
-  // Runs before the redirect, e.g. to keep a check-in code from expiring during sign-in.
-  prepare?: () => Promise<void>;
-}) {
+export function AuthGate({ children }: { children: (session: UserSession) => ReactNode }) {
   const session = useSession();
   const router = useRouter();
   const pathname = usePathname();
@@ -39,17 +32,7 @@ export function AuthGate({
   useEffect(() => {
     // Read storage directly: during hydration the hook still reports the signed-out server value.
     if (session || getSession()) return;
-    let active = true;
-    const next = `${pathname}${window.location.search}`;
-    Promise.resolve(prepare?.())
-      .catch(() => undefined)
-      .then(() => {
-        if (active) router.replace(loginHref(next));
-      });
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    router.replace(loginHref(`${pathname}${window.location.search}`));
   }, [session, pathname, router]);
 
   if (!session) return <GateMessage>Taking you to sign in…</GateMessage>;

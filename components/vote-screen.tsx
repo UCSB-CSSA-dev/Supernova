@@ -181,11 +181,11 @@ export function VoteScreen({ session }: { session: UserSession }) {
           <div>
             <p className="text-lg">You haven&apos;t checked in.</p>
             <p className="mt-1 text-muted-foreground">
-              Only people who scanned the check-in code at the venue can vote. If you checked in with a different
-              account, tap Switch above.
+              Only people who checked in while check-in was open can vote. If you checked in with a different account,
+              tap Switch above.
             </p>
             <Link href="/check-in" className="mt-3 inline-block text-sm text-primary underline-offset-4 hover:underline">
-              How to check in
+              Check in
             </Link>
           </div>
         </section>

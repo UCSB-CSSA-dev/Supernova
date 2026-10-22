@@ -3,8 +3,7 @@ import { clearSession, getSession, saveSession } from "@/lib/session";
 import type {
   AdminList,
   AdminStatus,
-  CheckinCode,
-  CheckinTicketResult,
+  CheckinStatus,
   LotteryState,
   Me,
   OrderAdminState,
@@ -121,16 +120,12 @@ export async function signIn(credential: string): Promise<UserSession> {
   return session;
 }
 
-export function fetchCheckinTicket(code: string): Promise<CheckinTicketResult> {
-  return call({ action: "checkinTicket", code }, { retries: 2 });
-}
-
 export function fetchMe(session: string): Promise<Me> {
   return call({ action: "me", session }, { retries: 2 });
 }
 
-export function register(session: string, ticket: string): Promise<RegisterResult> {
-  return call({ action: "register", session, ticket }, { retries: 3 });
+export function register(session: string): Promise<RegisterResult> {
+  return call({ action: "register", session }, { retries: 3 });
 }
 
 export function fetchVoteState(session: string): Promise<VoteState> {
@@ -185,8 +180,8 @@ export async function setWindow(name: WindowName, opensAt: string | null, closes
   return body.window;
 }
 
-export function fetchCheckinCode(): Promise<CheckinCode> {
-  return call({ action: "checkinCode", session: adminSession() }, { timeoutMs: 15000, retries: 1 });
+export function fetchCheckinStatus(): Promise<CheckinStatus> {
+  return call({ action: "checkinStatus", session: adminSession() }, { timeoutMs: 15000, retries: 1 });
 }
 
 export function fetchLotteryState(): Promise<LotteryState> {
