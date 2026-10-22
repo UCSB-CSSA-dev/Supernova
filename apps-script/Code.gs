@@ -1,5 +1,5 @@
 var ALLOWED_DOMAIN = "ucsb.edu";
-// Always an admin, and the only account that can add or remove trusted admins.
+// Always an admin, and the only account that can remove trusted admins. Any admin can add one.
 var OWNER_EMAIL = "jamesguo@ucsb.edu";
 var REGISTRATION_HEADERS = ["registered_at", "email", "name"];
 var RESULT_HEADERS = ["voted_at", "name", "email", "singer_name", "song_name"];
@@ -109,15 +109,15 @@ function requireAdmin_(session) {
 }
 
 function requireOwner_(admin) {
-  if (!isOwner_(admin.email)) throw new Error("Only " + OWNER_EMAIL + " can change the admin list.");
+  if (!isOwner_(admin.email)) throw new Error("Only " + OWNER_EMAIL + " can remove admins.");
 }
 
 function adminList_() {
   return { owner: OWNER_EMAIL, trusted: trustedAdmins_() };
 }
 
+// Any admin can add admins; only the owner can remove them.
 function addAdmin_(admin, email) {
-  requireOwner_(admin);
   email = email.trim().toLowerCase();
   if (!isAllowedEmail_(email)) throw new Error("Admins must use a @" + ALLOWED_DOMAIN + " address.");
   var lock = LockService.getScriptLock();

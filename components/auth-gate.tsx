@@ -85,7 +85,7 @@ function AdminCheckGate({ session, children }: { session: UserSession; children:
       <SignedInAs session={session} />
       {check.status === "denied" ? (
         <p className="mt-8">
-          {check.message} Ask jamesguo@ucsb.edu to add you as a trusted admin, or tap Switch to use another account.
+          {check.message} Ask any admin to add you on the admin page, or tap Switch to use another account.
         </p>
       ) : (
         <div className="mt-8 space-y-3">

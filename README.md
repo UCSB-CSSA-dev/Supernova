@@ -49,7 +49,7 @@ Sign-in only accepts verified Google Workspace accounts whose address ends in `@
    | `VARIABLES_SPREADSHEET_ID` | Variables spreadsheet id |
    | `GOOGLE_CLIENT_ID` | The OAuth client ID from step 1 |
 
-   There is no admin password. `jamesguo@ucsb.edu` (`OWNER_EMAIL` at the top of `Code.gs`) is always an admin and can add or remove trusted admin emails from the dashboard. Those are stored in the `ADMIN_EMAILS` row of the Variables sheet.
+   There is no admin password. `jamesguo@ucsb.edu` (`OWNER_EMAIL` at the top of `Code.gs`) is always an admin. Any admin can add more @ucsb.edu admins from the admin page, and only the owner can remove them. Those are stored in the `ADMIN_EMAILS` row of the Variables sheet.
 
    The script creates `SESSION_SECRET` on first use and keeps it in script properties. Deleting it signs everyone out.
 

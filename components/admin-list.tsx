@@ -47,8 +47,8 @@ export function AdminList({
       <CardHeader>
         <CardTitle>Admins</CardTitle>
         <CardDescription>
-          Admins sign in with Google. {admins.owner} is always an admin
-          {isOwner ? " and is the only one who can change this list." : " and manages this list."}
+          Admins sign in with Google. Any admin can add another @ucsb.edu admin. {admins.owner} is always an admin
+          and is the only one who can remove admins.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -75,20 +75,18 @@ export function AdminList({
             </li>
           ))}
         </ul>
-        {isOwner ? (
-          <form className="flex gap-2 border-t pt-4" onSubmit={(event) => void onAdd(event)}>
-            <Input
-              type="email"
-              placeholder="name@ucsb.edu"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              aria-label="Trusted admin email"
-            />
-            <Button type="submit" disabled={busy !== null || !email.trim()}>
-              {busy === "add" ? "Adding…" : "Add admin"}
-            </Button>
-          </form>
-        ) : null}
+        <form className="flex gap-2 border-t pt-4" onSubmit={(event) => void onAdd(event)}>
+          <Input
+            type="email"
+            placeholder="name@ucsb.edu"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            aria-label="Admin email"
+          />
+          <Button type="submit" disabled={busy !== null || !email.trim()}>
+            {busy === "add" ? "Adding…" : "Add admin"}
+          </Button>
+        </form>
       </CardContent>
     </Card>
   );
