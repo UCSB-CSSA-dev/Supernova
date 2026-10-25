@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { Mic, RefreshCw } from "lucide-react";
+import { Mic, RefreshCw, RotateCcw } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
 import { SignedInAs } from "@/components/google-sign-in";
+import { MailReveal, hasSeenMail } from "@/components/mail-reveal";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +29,11 @@ function RandomOrder({ session }: { session: UserSession }) {
   const [order, setOrder] = useState<OrderState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [name, setName] = useState("");
+  const [view, setView] = useState<"mail" | "order">("mail");
+  // Each replay remounts the letter so it starts from the mailbox again.
+  const [reveal, setReveal] = useState(() => ({ run: 0, autoplay: !hasSeenMail(session.email) }));
+  const [revealEnded, setRevealEnded] = useState(!reveal.autoplay);
+  const [name, setName] = useState(session.name);
   const [error, setError] = useState<string | null>(null);
   const [spinning, setSpinning] = useState(false);
   const [reel, setReel] = useState<number | null>(null);
@@ -113,11 +118,55 @@ function RandomOrder({ session }: { session: UserSession }) {
     }
   }
 
+  function replay() {
+    window.scrollTo(0, 0);
+    setReveal((current) => ({ run: current.run + 1, autoplay: true }));
+    setRevealEnded(false);
+    setView("mail");
+  }
+
   const mine = order?.mine ?? null;
+  const replayButton =
+    view === "order" || revealEnded ? (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: view === "mail" ? 1.5 : 0 }}
+        className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40"
+      >
+        <Button variant="secondary" className="rounded-full shadow-lg ring-1 ring-foreground/10" onClick={replay}>
+          <RotateCcw className="size-4" />
+          重播
+        </Button>
+      </motion.div>
+    ) : null;
+
+  if (view === "mail") {
+    return (
+      <MotionConfig reducedMotion="user">
+        <MailReveal
+          key={reveal.run}
+          name={session.name}
+          email={session.email}
+          autoplay={reveal.autoplay}
+          qualified={order ? order.allowed : null}
+          error={loadError}
+          claimed={Boolean(mine)}
+          onEnd={() => setRevealEnded(true)}
+          onRoll={() => {
+            window.scrollTo(0, 0);
+            setView("order");
+          }}
+        />
+        {replayButton}
+      </MotionConfig>
+    );
+  }
 
   return (
     <MotionConfig reducedMotion="user">
-      <PageShell title="Singing Order (Finals)" className="max-w-2xl">
+      {replayButton}
+      <PageShell title="Singing Order (Finals)" className="max-w-2xl pb-24">
         <SignedInAs session={session} />
 
         {loadError ? <p className="mt-6 text-destructive">{loadError}</p> : null}
