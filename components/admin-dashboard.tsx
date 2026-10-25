@@ -7,10 +7,13 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ADS, type AdId } from "@/components/ad-slot";
 import { WindowControl } from "@/components/window-control";
 import { AdminList } from "@/components/admin-list";
 import { OrderAdmin } from "@/components/order-admin";
-import { fetchAdminStatus, signOut } from "@/lib/backend";
+import { ResetButton } from "@/components/reset-button";
+import { fetchAdminStatus, resetCheckin, resetLottery, resetVotes, signOut } from "@/lib/backend";
 import { formatWhen } from "@/lib/format";
 import { googleClientId } from "@/lib/google";
 import { useAppUrl } from "@/lib/urls";
@@ -155,9 +158,28 @@ export function AdminDashboard() {
                 disabled={setupBlocked}
                 onChange={(next) => updateWindow("checkin", next)}
               />
-              <Button nativeButton={false} render={<Link href="/admin/check-in" />}>
-                Open check-in screen
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button nativeButton={false} render={<Link href="/admin/check-in" />}>
+                  Open check-in screen
+                </Button>
+                <ResetButton
+                  label="Reset check-in"
+                  title="Reset check-in?"
+                  description={
+                    <>
+                      All {status.registeredCount} check-ins are cleared, so everyone has to check in again before they can
+                      vote or enter the lucky draw. Votes already cast and lucky draw winners are not affected. The current
+                      list is kept in the Registrations spreadsheet as a dated tab.
+                    </>
+                  }
+                  success="Check-in reset. Everyone needs to check in again."
+                  disabled={setupBlocked || status.registeredCount === 0}
+                  onReset={async () => {
+                    await resetCheckin();
+                    await refresh();
+                  }}
+                />
+              </div>
               {status.recentRegistrations.length > 0 ? (
                 <div className="border-t pt-4">
                   <p className="text-sm font-medium">Latest check-ins</p>
@@ -213,6 +235,25 @@ export function AdminDashboard() {
                   </div>
                 </div>
               ) : null}
+              <div className="border-t pt-4">
+                <ResetButton
+                  label="Reset votes"
+                  title="Reset all votes?"
+                  description={
+                    <>
+                      All {status.voteCount} votes are cleared, the results board goes back to zero, and everyone who
+                      checked in can vote again. Check-ins and lucky draw winners are not affected. The current votes are
+                      kept in the Results spreadsheet as a dated tab.
+                    </>
+                  }
+                  success="Votes reset. Everyone who checked in can vote again."
+                  disabled={setupBlocked || status.voteCount === 0}
+                  onReset={async () => {
+                    await resetVotes();
+                    await refresh();
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
 
@@ -225,10 +266,26 @@ export function AdminDashboard() {
                 left in the draw.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-wrap gap-2">
               <Button nativeButton={false} render={<Link href="/admin/lottery" />} disabled={setupBlocked}>
                 Open lottery screen
               </Button>
+              <ResetButton
+                label="Reset lucky draw"
+                title="Reset the lucky draw?"
+                description={
+                  <>
+                    All {status.drawCount} winners are cleared and everyone who checked in is back in the draw. The
+                    current winners are kept in the Registrations spreadsheet as a renamed Lottery tab.
+                  </>
+                }
+                success="Lucky draw reset. Everyone who checked in can be drawn again."
+                disabled={setupBlocked || status.drawCount === 0}
+                onReset={async () => {
+                  await resetLottery();
+                  await refresh();
+                }}
+              />
             </CardContent>
           </Card>
 
@@ -239,6 +296,43 @@ export function AdminDashboard() {
             isOwner={status.isOwner}
             onChange={(admins) => setStatus((current) => (current ? { ...current, admins } : current))}
           />
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Sponsor ad views</CardTitle>
+              <CardDescription>
+                How many times each ad was shown, and how many different signed-in people saw it. Views are sent along
+                with people&apos;s next request, so counts can trail by a minute. Saved to the Ad views tab of the
+                Variables spreadsheet; press Refresh at the top for new numbers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Ad</TableHead>
+                    <TableHead className="text-right">Views</TableHead>
+                    <TableHead className="text-right">People</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(Object.keys(ADS) as AdId[]).map((ad) => {
+                    const count = (status.adViews ?? []).find((item) => item.ad === ad);
+                    return (
+                      <TableRow key={ad}>
+                        <TableCell>
+                          <span className="block">{ADS[ad].placement}</span>
+                          <span className="block text-xs text-muted-foreground">{ADS[ad].alt}</span>
+                        </TableCell>
+                        <TableCell className="text-right font-heading tabular-nums">{count?.views ?? 0}</TableCell>
+                        <TableCell className="text-right text-muted-foreground tabular-nums">{count?.viewers ?? 0}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
       ) : null}
     </main>

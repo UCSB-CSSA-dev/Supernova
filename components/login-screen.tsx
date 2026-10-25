@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AdPoster } from "@/components/ad-slot";
 import { GoogleSignIn } from "@/components/google-sign-in";
 import { PageShell } from "@/components/page-shell";
 import { useSession } from "@/lib/session";
@@ -28,6 +29,7 @@ export function LoginScreen() {
       ) : (
         <GoogleSignIn prompt="Sign in with your UCSB Google account to check in, vote, and enter the lucky draw." />
       )}
+      <AdPoster ad="welcome" className="mt-10" />
     </PageShell>
   );
 }

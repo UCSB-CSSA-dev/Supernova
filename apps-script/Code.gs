@@ -14,6 +14,12 @@ var ORDER_NAME_MAX = 40;
 var VARIABLE_HEADERS = ["variable_name", "value", "created_at"];
 // Hand edits to the Variables sheet take effect within this long; dashboard changes apply immediately.
 var VARIABLES_CACHE_SECONDS = 5;
+// Sponsor ad views ride along on other requests (data.adViews), one row per request on this tab of Variables.
+// Must match the ad ids in components/ad-slot.tsx.
+var AD_IDS = ["welcome", "checkin", "poster", "logo"];
+var AD_VIEWS_SHEET = "Ad views";
+var AD_VIEW_HEADERS = ["viewed_at", "ads", "email"];
+var AD_VIEWS_MAX = 20;
 var SESSION_MS = 12 * 60 * 60 * 1000;
 var WINDOWS = { checkin: "CHECKIN", voting: "VOTING" };
 var REQUIRED_PROPS = [
@@ -45,6 +51,8 @@ function json_(body) {
 function handle_(data) {
   try {
     var action = String(data.action || "");
+    recordAdViews_(data);
+    if (action === "adViews") return { ok: true };
     if (action === "signIn") return signIn_(String(data.credential || ""));
     if (action === "me") return me_(requireUser_(data.session));
     if (action === "register") return register_(requireUser_(data.session));
@@ -62,6 +70,9 @@ function handle_(data) {
     if (action === "checkinStatus") return checkinStatus_();
     if (action === "lotteryState") return lotteryState_();
     if (action === "lotteryDraw") return lotteryDraw_();
+    if (action === "lotteryReset") return lotteryReset_();
+    if (action === "checkinReset") return checkinReset_();
+    if (action === "votesReset") return votesReset_();
     if (action === "orderAdmin") return orderAdmin_();
     if (action === "orderReset") return orderReset_();
     return { ok: false, error: "Unknown action." };
@@ -287,6 +298,38 @@ function setWindow_(name, opensAt, closesAt) {
 
 function checkinStatus_() {
   return { ok: true, window: windowState_("checkin"), registeredCount: readRegistrations_().length };
+}
+
+function checkinReset_() {
+  return archiveFirstTab_("REGISTRATIONS_SPREADSHEET_ID", "Registrations");
+}
+
+function votesReset_() {
+  var result = archiveFirstTab_("RESULTS_SPREADSHEET_ID", "Results");
+  CacheService.getScriptCache().remove("results");
+  return result;
+}
+
+// The script always reads the first tab, so its rows are copied to a dated tab and then cleared.
+// Only the rows that were copied are cleared, so a row that lands mid-reset is kept rather than lost.
+function archiveFirstTab_(idProp, label) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var spreadsheet = spreadsheet_(idProp, label);
+    var sheet = spreadsheet.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { ok: true, archived: 0 };
+    sheet.copyTo(spreadsheet).setName(label + " (reset " + resetStamp_() + ")");
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+    return { ok: true, archived: lastRow - 1 };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function resetStamp_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 }
 
 // ---------- Spreadsheets ----------
@@ -657,6 +700,20 @@ function lotteryDraw_() {
   }
 }
 
+// Keeps the old winners: the tab is renamed rather than cleared, and the next draw starts a new Lottery tab.
+function lotteryReset_() {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var spreadsheet = spreadsheet_("REGISTRATIONS_SPREADSHEET_ID", "Registrations");
+    var sheet = spreadsheet.getSheetByName(LOTTERY_SHEET);
+    if (sheet && sheet.getLastRow() > 1) sheet.setName(LOTTERY_SHEET + " (reset " + resetStamp_() + ")");
+    return lotteryState_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ---------- Singing order ----------
 
 function orderSheet_() {
@@ -788,15 +845,53 @@ function orderReset_() {
   try {
     var spreadsheet = spreadsheet_("VARIABLES_SPREADSHEET_ID", "Variables");
     var sheet = spreadsheet.getSheetByName(ORDER_SHEET);
-    if (sheet && sheet.getLastRow() > 1) {
-      var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-      sheet.setName(ORDER_SHEET + " (reset " + stamp + ")");
-    }
+    if (sheet && sheet.getLastRow() > 1) sheet.setName(ORDER_SHEET + " (reset " + resetStamp_() + ")");
     setVariables_({ ORDER_SHUFFLE: "" });
     return orderAdminPayload_(readOrder_());
   } finally {
     lock.releaseLock();
   }
+}
+
+// ---------- Sponsor ads ----------
+
+function adViewsSheet_() {
+  var spreadsheet = spreadsheet_("VARIABLES_SPREADSHEET_ID", "Variables");
+  return spreadsheet.getSheetByName(AD_VIEWS_SHEET) || spreadsheet.insertSheet(AD_VIEWS_SHEET, spreadsheet.getSheets().length);
+}
+
+// Best effort: a lost count is fine, but counting must never break the request it rides on.
+function recordAdViews_(data) {
+  if (!Array.isArray(data.adViews) || !data.adViews.length) return;
+  try {
+    var ads = data.adViews.slice(0, AD_VIEWS_MAX).map(String).filter(function (ad) { return AD_IDS.indexOf(ad) !== -1; });
+    if (!ads.length) return;
+    var session = verify_(data.session, "session");
+    var email = session && isAllowedEmail_(session.e) ? String(session.e) : "";
+    var sheet = adViewsSheet_();
+    var map = ensureHeaders_(sheet, AD_VIEW_HEADERS, "Ad views");
+    appendRecord_(sheet, map, { viewed_at: new Date().toISOString(), ads: ads.join(","), email: email });
+  } catch (ignored) {}
+}
+
+// Views counts every time an ad was shown; viewers counts distinct signed-in accounts that saw it.
+function adViewCounts_() {
+  var sheet = adViewsSheet_();
+  var map = ensureHeaders_(sheet, AD_VIEW_HEADERS, "Ad views");
+  var counts = {};
+  AD_IDS.forEach(function (ad) { counts[ad] = { views: 0, viewers: {} }; });
+  dataRows_(sheet).forEach(function (row) {
+    var email = cell_(row, map.email).toLowerCase();
+    cell_(row, map.ads).split(",").forEach(function (ad) {
+      var count = counts[ad.trim()];
+      if (!count) return;
+      count.views += 1;
+      if (email) count.viewers[email] = true;
+    });
+  });
+  return AD_IDS.map(function (ad) {
+    return { ad: ad, views: counts[ad].views, viewers: Object.keys(counts[ad].viewers).length };
+  });
 }
 
 // ---------- Admin status ----------
@@ -835,6 +930,7 @@ function status_(admin) {
     voteCount: 0,
     drawCount: 0,
     recentRegistrations: [],
+    adViews: [],
     checkin: orDefault_(function () { return windowState_("checkin"); }, unscheduled),
     voting: orDefault_(function () { return windowState_("voting"); }, unscheduled),
   };
@@ -858,5 +954,6 @@ function status_(admin) {
   base.voteCount = ballots.rows ? ballots.rows.length : 0;
   base.drawCount = draws.length;
   base.recentRegistrations = (registrations.rows || []).slice(-5).reverse();
+  base.adViews = orDefault_(adViewCounts_, []);
   return base;
 }

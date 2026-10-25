@@ -1,3 +1,4 @@
+import { hasQueuedAdViews, queueAdView, returnAdViews, takeAdViews } from "@/lib/ad-views";
 import { forgetGoogleAccount } from "@/lib/google";
 import { clearSession, getSession, saveSession } from "@/lib/session";
 import type {
@@ -21,12 +22,15 @@ import type {
 export class BackendError extends Error {
   unauthenticated: boolean;
   signedOut: boolean;
+  // Google was too busy or unreachable; asking again later may work.
+  busy: boolean;
 
-  constructor(message: string, options: { unauthenticated?: boolean; signedOut?: boolean } = {}) {
+  constructor(message: string, options: { unauthenticated?: boolean; signedOut?: boolean; busy?: boolean } = {}) {
     super(message);
     this.name = "BackendError";
     this.unauthenticated = Boolean(options.unauthenticated);
     this.signedOut = Boolean(options.signedOut);
+    this.busy = Boolean(options.busy);
   }
 }
 
@@ -84,13 +88,19 @@ async function request(payload: Record<string, unknown>, timeoutMs?: number): Pr
 
 async function call<T>(payload: Record<string, unknown>, options: CallOptions = {}): Promise<T> {
   const retries = options.retries ?? 0;
+  // Queued sponsor ad views ride along on whatever request goes out next instead of costing their own.
+  const adViews = takeAdViews();
+  const sent = adViews.length ? { ...payload, adViews } : payload;
   let body: Payload | null = null;
   for (let attempt = 0; body === null; attempt += 1) {
     try {
-      body = await request(payload, options.timeoutMs);
+      body = await request(sent, options.timeoutMs);
     } catch (error) {
-      if (!(error instanceof TransientError)) throw error;
-      if (attempt >= retries) throw new BackendError(error.message);
+      if (!(error instanceof TransientError) || attempt >= retries) {
+        returnAdViews(adViews);
+        if (error instanceof TransientError) throw new BackendError(error.message, { busy: true });
+        throw error;
+      }
       await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1) + Math.random() * 600));
     }
   }
@@ -104,6 +114,21 @@ async function call<T>(payload: Record<string, unknown>, options: CallOptions = 
 }
 
 // ---------- Audience ----------
+
+// An ad view with no request after it (like the poster after voting) is sent on its own, spread out
+// over a while so a room full of phones doesn't send them all at once.
+const AD_FLUSH_MS = 20000;
+const AD_FLUSH_JITTER_MS = 20000;
+let adFlushTimer: number | undefined;
+
+export function recordAdView(ad: string): void {
+  queueAdView(ad);
+  window.clearTimeout(adFlushTimer);
+  adFlushTimer = window.setTimeout(() => {
+    if (!hasQueuedAdViews()) return;
+    call({ action: "adViews", session: getSession()?.token ?? "" }).catch(() => undefined);
+  }, AD_FLUSH_MS + Math.random() * AD_FLUSH_JITTER_MS);
+}
 
 export async function signIn(credential: string): Promise<UserSession> {
   const body = await call<{ session: string; email: string; name: string; expiresAt: number }>(
@@ -195,6 +220,21 @@ export function fetchOrderAdmin(): Promise<OrderAdminState> {
 // Never retried: a repeated request could archive claims made right after the first reset.
 export function resetOrder(): Promise<OrderAdminState> {
   return call({ action: "orderReset", session: adminSession() }, { timeoutMs: 30000 });
+}
+
+// Never retried: a repeated request could archive check-ins made right after the first reset.
+export function resetCheckin(): Promise<{ archived: number }> {
+  return call({ action: "checkinReset", session: adminSession() }, { timeoutMs: 30000 });
+}
+
+// Never retried: a repeated request could archive votes cast right after the first reset.
+export function resetVotes(): Promise<{ archived: number }> {
+  return call({ action: "votesReset", session: adminSession() }, { timeoutMs: 30000 });
+}
+
+// Never retried: a repeated request could archive a winner drawn right after the first reset.
+export function resetLottery(): Promise<LotteryState> {
+  return call({ action: "lotteryReset", session: adminSession() }, { timeoutMs: 30000 });
 }
 
 // Never retried: a repeated request would draw a second winner.

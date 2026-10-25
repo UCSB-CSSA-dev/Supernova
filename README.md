@@ -75,12 +75,14 @@ Create four files on the same Google account:
 
   `/random-order` saves claims (`number`, `name`, `email`, `claimed_at`) to a `Singing order` tab it adds to this spreadsheet. Each account gets the next unclaimed number from `ORDER_SHUFFLE`. Admins see the full list (with emails) under **4. Singing order** on `/admin`. **Reset** renames the tab to `Singing order (reset <time>)` so the old list is kept, and clears `ORDER_SHUFFLE`. The next claim then starts a new tab and a new shuffle.
 
+  Sponsor ad views are counted on an `Ad views` tab (`viewed_at`, `ads`, `email`) it adds here. Each time an ad is shown the browser queues it and sends it along with its next request, so counting adds almost no traffic. **Sponsor ad views** at the bottom of `/admin` shows views and distinct signed-in viewers per ad. The ad ids (`welcome`, `checkin`, `poster`, `logo`) are set in `components/ad-slot.tsx` and must match `AD_IDS` in `Code.gs`. Ads are cropped to fill their frame (4:3 for `welcome`, 4:5 for `checkin` and `poster`), so supply sponsor ads at that shape to show them uncropped. Delete the tab's rows to start counting from zero.
+
   Set these from `/admin`. Edits made directly in the sheet take effect within 5 seconds. An empty value means unset.
 - **Registrations** can start empty. The script writes `registered_at`, `email`, `name` on the first tab and keeps lottery draws (`drawn_at`, `round`, `email`, `name`) on a `Lottery` tab it creates.
 - **Singers** with columns `singer_name` and `song_name`.
 - **Results** can start empty. The script writes `voted_at`, `name`, `email`, `singer_name`, `song_name`.
 
-The script account must be able to edit Variables, Registrations, and Results. Singers can be view-only if that same account can read it. If the same person somehow appears twice (two phones at once), only their first row counts. To redo the lucky draw, delete rows from the `Lottery` tab.
+The script account must be able to edit Variables, Registrations, and Results. Singers can be view-only if that same account can read it. If the same person somehow appears twice (two phones at once), only their first row counts. To start over, use the reset buttons on `/admin`. **Reset check-in** copies the check-ins to a dated tab and clears the first tab, so everyone has to check in again (votes and lucky draw winners are kept). **Reset votes** does the same for the Results spreadsheet, so the board goes back to zero and everyone who checked in can vote again. **Reset lucky draw** renames the `Lottery` tab with a date, so everyone who checked in can be drawn again.
 
 ## 3. Local frontend
 

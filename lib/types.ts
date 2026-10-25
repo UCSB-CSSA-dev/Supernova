@@ -140,6 +140,13 @@ export type AdminStatus = {
   voteCount: number;
   drawCount: number;
   recentRegistrations: Registration[];
+  adViews: AdViewCount[];
   checkin: TimeWindow;
   voting: TimeWindow;
+};
+
+export type AdViewCount = {
+  ad: string;
+  views: number;
+  viewers: number;
 };

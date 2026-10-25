@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { preload } from "react-dom";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,23 +14,26 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { CircleCheck, Clock, TriangleAlert, UserX } from "lucide-react";
+import { Clock, LoaderCircle, TriangleAlert, UserX } from "lucide-react";
 import Link from "next/link";
-import { AdPoster, AdSlot } from "@/components/ad-slot";
+import { ADS, AdPoster, AdSlot } from "@/components/ad-slot";
 import { SignedInAs } from "@/components/google-sign-in";
-import { castVote, fetchVoteState } from "@/lib/backend";
+import { LoadingDots, StatusHeader } from "@/components/status-header";
+import { BackendError, castVote, fetchVoteState } from "@/lib/backend";
 import { describeWindow } from "@/lib/format";
 import type { Choice } from "@/lib/ranking";
-import type { NotOpen, UserSession, VoteState as ServerVoteState } from "@/lib/types";
+import type { NotOpen, UserSession, VoteResult, VoteState as ServerVoteState } from "@/lib/types";
 
 // opensLocally is the scheduled opening converted to this phone's clock.
 type Waiting = NotOpen & { opensLocally: number | null };
 
 type VoteState =
-  | { status: "loading" }
+  | { status: "loading"; retryAt: number | null }
   | { status: "error"; message: string }
   | Exclude<ServerVoteState, NotOpen>
   | Waiting;
+
+type Submission = { phase: "sending"; choice: Choice } | { phase: "failed"; choice: Choice; message: string };
 
 // While voting has not opened, the page checks again on its own so nobody has to refresh.
 // Hundreds of phones wait on this page, so checks are spread out to stay under Apps Script's concurrency limit.
@@ -39,6 +43,22 @@ const WAITING_JITTER_MS = 15000;
 const LOCAL_SWITCH_MARGIN_MS = 10000;
 // Covers clock estimates that are off by the request's travel time, so early votes aren't rejected.
 const OPEN_SAFETY_MS = 1500;
+// When everyone opens the ballot at once Google can turn requests away; the page keeps trying, backing off
+// and spreading phones out, instead of giving up.
+const BUSY_RETRY_MS = [3000, 6000, 10000, 15000, 20000];
+const BUSY_JITTER_MS = 4000;
+// Extra rounds on top of castVote's own retries before the vote screen asks the person to try again.
+const SUBMIT_ROUNDS = 3;
+// The sponsor ad shown while a vote is sent stays up at least this long.
+const MIN_SUBMIT_MS = 5000;
+
+function busyDelay(attempt: number): number {
+  return BUSY_RETRY_MS[Math.min(attempt, BUSY_RETRY_MS.length - 1)] + Math.random() * BUSY_JITTER_MS;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function receive(payload: ServerVoteState): VoteState {
   if (payload.status !== "notOpen") return payload;
@@ -54,31 +74,60 @@ function choiceValue(choice: Choice): string {
   return `${choice.singerName}\u0000${choice.songName}`;
 }
 
+async function castVoteUntilAnswered(token: string, choice: Choice): Promise<VoteResult> {
+  for (let round = 0; ; round += 1) {
+    try {
+      return await castVote(token, choice.singerName, choice.songName);
+    } catch (error) {
+      if (!(error instanceof BackendError && error.busy) || round >= SUBMIT_ROUNDS) throw error;
+      await sleep(busyDelay(round));
+    }
+  }
+}
+
 export function VoteScreen({ session }: { session: UserSession }) {
-  const [state, setState] = useState<VoteState>({ status: "loading" });
+  const [state, setState] = useState<VoteState>({ status: "loading", retryAt: null });
+  const [loadKey, setLoadKey] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submission, setSubmission] = useState<Submission | null>(null);
+  const [ballotNote, setBallotNote] = useState<string | null>(null);
+  const mounted = useRef(true);
   const opensLocally = state.status === "notOpen" ? state.opensLocally : null;
   const waitingFor =
     state.status === "notOpen" && state.window.phase !== "closed" ? (state.window.opensAt ?? "unscheduled") : null;
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let active = true;
-    async function load() {
+    let timer: number | undefined;
+    async function load(attempt: number) {
       try {
         const payload = await fetchVoteState(session.token);
         if (active) setState(receive(payload));
       } catch (error) {
-        if (active) setState({ status: "error", message: error instanceof Error ? error.message : "Voting is temporarily unavailable." });
+        if (!active) return;
+        if (error instanceof BackendError && error.busy) {
+          const wait = busyDelay(attempt);
+          setState({ status: "loading", retryAt: Date.now() + wait });
+          timer = window.setTimeout(() => void load(attempt + 1), wait);
+          return;
+        }
+        setState({ status: "error", message: error instanceof Error ? error.message : "Voting is temporarily unavailable." });
       }
     }
-    void load();
+    void load(0);
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
-  }, [session.token]);
+  }, [session.token, loadKey]);
 
   useEffect(() => {
     if (state.status !== "notOpen" || state.opensLocally === null || !state.candidates) return;
@@ -116,51 +165,76 @@ export function VoteScreen({ session }: { session: UserSession }) {
     };
   }, [waitingFor, opensLocally, session.token]);
 
+  function reload() {
+    setState({ status: "loading", retryAt: null });
+    setLoadKey((count) => count + 1);
+  }
+
   const selectedChoice =
     state.status === "open"
       ? state.candidates.find((choice) => choiceValue(choice) === selected) ?? null
       : null;
 
-  async function submitVote() {
-    if (!selectedChoice || submitting) return;
-    setSubmitting(true);
-    setSubmitError(null);
+  async function submitVote(choice: Choice) {
+    setConfirmOpen(false);
+    setBallotNote(null);
+    setSubmission({ phase: "sending", choice });
+    const started = Date.now();
+    let finish: () => void;
     try {
-      const payload = await castVote(session.token, selectedChoice.singerName, selectedChoice.songName);
-      if (payload.status === "unknownChoice") {
-        setSubmitError("That performance is no longer on the list.");
-        return;
-      }
-      setConfirmOpen(false);
-      if (payload.status === "voted") {
-        setState({ status: "used", singerName: payload.singerName, songName: payload.songName });
-      } else {
-        setState(receive(payload));
-      }
+      const payload = await castVoteUntilAnswered(session.token, choice);
+      finish = () => {
+        setSubmission(null);
+        if (payload.status === "voted") {
+          setState({ status: "used", singerName: payload.singerName, songName: payload.songName });
+        } else if (payload.status === "unknownChoice") {
+          setSelected(null);
+          setBallotNote("That performance is no longer on the list. Pick again from the updated ballot.");
+          reload();
+        } else {
+          setState(receive(payload));
+        }
+      };
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "The vote could not be saved. Try again.");
-    } finally {
-      setSubmitting(false);
+      const message = error instanceof Error ? error.message : "The vote could not be sent.";
+      finish = () => setSubmission({ phase: "failed", choice, message });
     }
+    await sleep(Math.max(0, MIN_SUBMIT_MS - (Date.now() - started)));
+    if (mounted.current) finish();
   }
 
-  if (state.status === "used") {
+  if (submission || state.status === "used") {
     return (
       <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 py-4">
-        <header
-          className="flex items-center gap-3 rounded-xl bg-card px-4 py-3 ring-1 ring-foreground/10"
-          aria-live="polite"
-        >
-          <CircleCheck className="size-5 shrink-0 text-primary" />
-          <div className="min-w-0">
-            <p className="text-[11px] tracking-[0.3em] text-primary uppercase">Supernova · Vote recorded</p>
+        {submission?.phase === "sending" ? (
+          <StatusHeader tone="working" label="Submitting your vote">
+            <p className="truncate text-sm">
+              <span className="font-medium">{submission.choice.singerName}</span>
+              <span className="text-muted-foreground"> · {submission.choice.songName}</span>
+              <LoadingDots />
+            </p>
+          </StatusHeader>
+        ) : submission?.phase === "failed" ? (
+          <StatusHeader tone="error" label="Vote not sent">
+            <p className="text-sm">{submission.message}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void submitVote(submission.choice)}>
+                Try again
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setSubmission(null)}>
+                Back to ballot
+              </Button>
+            </div>
+          </StatusHeader>
+        ) : state.status === "used" ? (
+          <StatusHeader tone="done" label="Vote recorded">
             <p className="truncate text-sm">
               <span className="font-medium">{state.singerName}</span>
               <span className="text-muted-foreground"> · {state.songName}</span>
             </p>
-          </div>
-        </header>
-        <AdPoster className="mt-4" />
+          </StatusHeader>
+        ) : null}
+        <AdPoster ad="poster" className="mt-4" />
       </main>
     );
   }
@@ -171,9 +245,16 @@ export function VoteScreen({ session }: { session: UserSession }) {
       <h1 className="mt-2 font-heading text-4xl">Cast your vote</h1>
       <SignedInAs session={session} />
 
-      {state.status === "loading" ? <p className="mt-8 text-muted-foreground">Loading the ballot…</p> : null}
+      {state.status === "loading" ? <BallotLoading retryAt={state.retryAt} onRetry={reload} /> : null}
 
-      {state.status === "error" ? <p className="mt-8 text-destructive">{state.message}</p> : null}
+      {state.status === "error" ? (
+        <div className="mt-8 space-y-3">
+          <p className="text-destructive">{state.message}</p>
+          <Button variant="outline" onClick={reload}>
+            Try again
+          </Button>
+        </div>
+      ) : null}
 
       {state.status === "unregistered" ? (
         <section className="mt-8 flex gap-4 rounded-xl bg-card p-5 ring-1 ring-foreground/10">
@@ -216,6 +297,8 @@ export function VoteScreen({ session }: { session: UserSession }) {
             if (selectedChoice) setConfirmOpen(true);
           }}
         >
+          <PreloadPoster />
+          {ballotNote ? <p className="mb-4 text-sm text-destructive">{ballotNote}</p> : null}
           {state.candidates.length === 0 ? (
             <p className="text-muted-foreground">The performers are not listed yet.</p>
           ) : (
@@ -251,15 +334,7 @@ export function VoteScreen({ session }: { session: UserSession }) {
         </form>
       ) : null}
 
-      <AlertDialog
-        open={confirmOpen}
-        onOpenChange={(open) => {
-          if (!submitting) {
-            setConfirmOpen(open);
-            if (!open) setSubmitError(null);
-          }
-        }}
-      >
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Submit this vote?</AlertDialogTitle>
@@ -268,7 +343,6 @@ export function VoteScreen({ session }: { session: UserSession }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AdSlot />
-          {submitError ? <p className="text-sm text-destructive">{submitError}</p> : null}
           <AlertDialogFooter className="sm:flex-wrap">
             {/* First in the DOM so the footer's mobile flex-col-reverse puts it at the bottom. */}
             <p
@@ -278,14 +352,55 @@ export function VoteScreen({ session }: { session: UserSession }) {
               <TriangleAlert className="size-4 shrink-0" aria-hidden />
               Your vote option CANNOT be changed after submitting!
             </p>
-            <AlertDialogCancel disabled={submitting}>Go back</AlertDialogCancel>
-            <AlertDialogAction disabled={submitting} onClick={() => void submitVote()}>
-              {submitting ? "Submitting…" : "Submit vote"}
-            </AlertDialogAction>
+            <AlertDialogCancel>Go back</AlertDialogCancel>
+            <AlertDialogAction onClick={() => selectedChoice && void submitVote(selectedChoice)}>Submit vote</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </main>
+  );
+}
+
+// Fetch the submitting-screen ad while people pick, so it's already there when they submit.
+function PreloadPoster() {
+  preload(ADS.poster.src.src, { as: "image" });
+  return null;
+}
+
+// Shown while the ballot loads, including while Google is too busy and the page is waiting to try again.
+function BallotLoading({ retryAt, onRetry }: { retryAt: number | null; onRetry: () => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  const [started] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const slow = now - started > 5000;
+  const seconds = retryAt ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : null;
+
+  return (
+    <section className="mt-8 rounded-xl bg-card p-5 ring-1 ring-foreground/10" aria-live="polite" aria-busy>
+      <div className="flex items-center gap-3">
+        <LoaderCircle className="size-6 shrink-0 animate-spin text-primary" />
+        <p className="text-lg">
+          Loading the ballot
+          <LoadingDots />
+        </p>
+      </div>
+      {retryAt !== null || slow ? (
+        <div className="mt-3 space-y-3 text-sm text-muted-foreground">
+          <p>
+            Lots of people are voting right now, so this can take a little while. Keep this page open
+            {seconds !== null ? (seconds > 0 ? ` — trying again in ${seconds}s.` : " — trying again now.") : "."}
+          </p>
+          {retryAt !== null ? (
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              Try now
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
