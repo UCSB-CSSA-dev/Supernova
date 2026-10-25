@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   output: "export",
   ...(basePath ? { basePath } : {}),
   images: { unoptimized: true },
+  experimental: { agentUpgrade: "security" },
   turbopack: {
     rules: {
       "*.css": {
