@@ -5,9 +5,10 @@ var REGISTRATION_HEADERS = ["registered_at", "email", "name"];
 var RESULT_HEADERS = ["voted_at", "name", "email", "singer_name", "song_name"];
 var LOTTERY_HEADERS = ["drawn_at", "round", "email", "name"];
 var LOTTERY_SHEET = "Lottery";
-// Singing order lives on its own tab of the Variables spreadsheet; the shuffle is the ORDER_SHUFFLE variable.
-var ORDER_SIZE = 20;
-var ORDER_SHEET = "Singing order";
+// Singing order lives on its own tab of the Variables spreadsheet; the shuffle is the FINALS_ORDER_SHUFFLE variable.
+// Only the emails in the SINGER_EMAILS variable (set from /admin) can claim a number, and there is one number per singer.
+var ORDER_SHEET = "Singing Order (Finals)";
+var ORDER_SHUFFLE_VARIABLE = "FINALS_ORDER_SHUFFLE";
 var ORDER_HEADERS = ["number", "name", "email", "claimed_at"];
 var ORDER_NAME_MAX = 40;
 // Runtime settings (CHECKIN_OPENS_AT, VOTING_CLOSES_AT, ADMIN_EMAILS, ...), one row per variable.
@@ -75,6 +76,7 @@ function handle_(data) {
     if (action === "votesReset") return votesReset_();
     if (action === "orderAdmin") return orderAdmin_();
     if (action === "orderReset") return orderReset_();
+    if (action === "setSingers") return setSingers_(data.emails);
     return { ok: false, error: "Unknown action." };
   } catch (error) {
     return {
@@ -120,6 +122,44 @@ function requireOwner_(admin) {
 
 function adminList_() {
   return { owner: OWNER_EMAIL, trusted: trustedAdmins_() };
+}
+
+// ---------- Singers (finalists) ----------
+
+function parseEmails_(raw) {
+  var list = Array.isArray(raw) ? raw : String(raw || "").split(/[\s,;]+/);
+  var seen = {};
+  var emails = [];
+  list.forEach(function (item) {
+    var email = String(item || "").trim().toLowerCase();
+    if (!email || seen[email]) return;
+    seen[email] = true;
+    emails.push(email);
+  });
+  return emails;
+}
+
+function singerEmails_(fresh) {
+  return parseEmails_(readVariables_(fresh).SINGER_EMAILS || "");
+}
+
+function isSinger_(email) {
+  return singerEmails_().indexOf(email) !== -1;
+}
+
+// Replaces the whole list. Singers can't check in, are the only ones who can claim a singing order, and are always in the lucky draw.
+function setSingers_(raw) {
+  var emails = parseEmails_(raw);
+  var invalid = emails.filter(function (email) { return !isAllowedEmail_(email); });
+  if (invalid.length) throw new Error("Singers must use a @" + ALLOWED_DOMAIN + " address: " + invalid.join(", "));
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    setVariables_({ SINGER_EMAILS: emails.join(",") });
+    return orderAdminPayload_(readOrder_(), emails);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Any admin can add admins; only the owner can remove them.
@@ -534,13 +574,16 @@ function me_(user) {
     name: user.name,
     registered: Boolean(registration),
     registeredAt: registration ? registration.registeredAt : null,
+    singer: isSinger_(user.email),
     checkin: windowState_("checkin"),
     voting: windowState_("voting"),
   };
 }
 
 // Anyone signed in with a @ucsb.edu account who opens the check-in page while check-in is open is checked in.
+// Singers can't check in; they're entered in the lucky draw from the singer list instead.
 function register_(user) {
+  if (isSinger_(user.email)) return { ok: true, status: "singer" };
   var existing = findRegistration_(user.email);
   if (existing) {
     return { ok: true, status: "registered", registeredAt: existing.registeredAt, already: true, voting: windowState_("voting") };
@@ -657,42 +700,65 @@ function randomIndex_(n) {
   }
 }
 
-function lotteryPayload_(registrations, draws) {
+// Everyone who checked in plus every singer (who can't check in), once each. A singer's name comes from
+// their singing order claim when they made one.
+function lotteryEntrants_() {
+  var registrations = readRegistrations_();
+  var singers = singerEmails_();
+  var claimedNames = {};
+  if (singers.length) readOrder_().forEach(function (entry) { claimedNames[entry.email] = entry.name; });
+  var seen = {};
+  var entrants = [];
+  registrations.forEach(function (row) {
+    seen[row.email] = true;
+    entrants.push({ email: row.email, name: row.name });
+  });
+  singers.forEach(function (email) {
+    if (seen[email]) return;
+    seen[email] = true;
+    entrants.push({ email: email, name: claimedNames[email] || "" });
+  });
+  return { entrants: entrants, registered: registrations.length, singers: singers.length };
+}
+
+function lotteryPayload_(field, draws) {
   var drawn = {};
   draws.forEach(function (draw) { drawn[draw.email] = true; });
-  var pool = registrations.filter(function (row) { return !drawn[row.email]; });
+  var pool = field.entrants.filter(function (row) { return !drawn[row.email]; });
   return {
     ok: true,
     draws: draws,
-    registered: registrations.length,
+    registered: field.registered,
+    singers: field.singers,
     eligible: pool.length,
     names: pool.slice(0, 200).map(function (row) { return row.name || row.email.split("@")[0]; }),
   };
 }
 
 function lotteryState_() {
-  return lotteryPayload_(readRegistrations_(), readDraws_());
+  return lotteryPayload_(lotteryEntrants_(), readDraws_());
 }
 
 function lotteryDraw_() {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var registrations = readRegistrations_();
+    var field = lotteryEntrants_();
     var draws = readDraws_();
     var drawn = {};
     draws.forEach(function (draw) { drawn[draw.email] = true; });
-    var pool = registrations.filter(function (row) { return !drawn[row.email]; });
+    var pool = field.entrants.filter(function (row) { return !drawn[row.email]; });
     if (!pool.length) {
-      throw new Error(registrations.length ? "Everyone who checked in has already been drawn." : "Nobody has checked in yet.");
+      throw new Error(field.entrants.length ? "Everyone in the draw has already been drawn." : "Nobody is in the draw yet.");
     }
     var person = pool[randomIndex_(pool.length)];
     var round = draws.reduce(function (max, draw) { return Math.max(max, draw.round); }, 0) + 1;
-    var winner = { round: round, drawnAt: new Date().toISOString(), email: person.email, name: person.name };
+    var name = person.name || person.email.split("@")[0];
+    var winner = { round: round, drawnAt: new Date().toISOString(), email: person.email, name: name };
     var sheet = lotterySheet_();
     var map = ensureHeaders_(sheet, LOTTERY_HEADERS, "Lottery");
     appendRecord_(sheet, map, { drawn_at: winner.drawnAt, round: String(round), email: winner.email, name: winner.name });
-    var payload = lotteryPayload_(registrations, draws.concat([winner]));
+    var payload = lotteryPayload_(field, draws.concat([winner]));
     payload.winner = winner;
     return payload;
   } finally {
@@ -724,14 +790,14 @@ function orderSheet_() {
 // The first row for an email and for a number wins, so a hand edit can never give out a number twice.
 function readOrder_() {
   var sheet = orderSheet_();
-  var map = ensureHeaders_(sheet, ORDER_HEADERS, "Singing order");
+  var map = ensureHeaders_(sheet, ORDER_HEADERS, ORDER_SHEET);
   var byEmail = {};
   var byNumber = {};
   var entries = [];
   dataRows_(sheet).forEach(function (row) {
     var email = cell_(row, map.email).toLowerCase();
     var number = Number(cell_(row, map.number));
-    if (!email || byEmail[email] || number % 1 !== 0 || number < 1 || number > ORDER_SIZE || byNumber[number]) return;
+    if (!email || byEmail[email] || number % 1 !== 0 || number < 1 || byNumber[number]) return;
     var entry = { number: number, name: cell_(row, map.name), email: email, claimedAt: cell_(row, map.claimed_at) };
     byEmail[email] = entry;
     byNumber[number] = entry;
@@ -740,51 +806,61 @@ function readOrder_() {
   return entries;
 }
 
-function orderPayload_(user, entries) {
+// One number per singer. Numbers already handed out stay valid if the list later shrinks.
+function orderSize_(entries, singers) {
+  return entries.reduce(function (max, entry) { return Math.max(max, entry.number); }, singers.length);
+}
+
+function orderPayload_(user, entries, singers) {
   var mine = entries.filter(function (entry) { return entry.email === user.email; })[0] || null;
+  var size = orderSize_(entries, singers);
   return {
     ok: true,
-    size: ORDER_SIZE,
+    size: size,
+    allowed: singers.indexOf(user.email) !== -1,
     mine: mine ? { number: mine.number, name: mine.name, claimedAt: mine.claimedAt } : null,
     lineup: entries
       .map(function (entry) { return { number: entry.number, name: entry.name }; })
       .sort(function (a, b) { return a.number - b.number; }),
-    remaining: ORDER_SIZE - entries.length,
+    remaining: Math.max(0, size - entries.length),
   };
 }
 
 function orderState_(user) {
-  return orderPayload_(user, readOrder_());
+  return orderPayload_(user, readOrder_(), singerEmails_());
 }
 
-function isOrderShuffle_(list) {
-  if (list.length !== ORDER_SIZE) return false;
+function isOrderShuffle_(list, size) {
+  if (list.length !== size) return false;
   var seen = {};
   return list.every(function (number) {
-    if (number % 1 !== 0 || number < 1 || number > ORDER_SIZE || seen[number]) return false;
+    if (number % 1 !== 0 || number < 1 || number > size || seen[number]) return false;
     seen[number] = true;
     return true;
   });
 }
 
-// Shuffled once, then kept. To start over, clear ORDER_SHUFFLE and the Singing order rows. Caller holds the script lock.
-function orderShuffle_() {
-  var stored = readVariables_(true).ORDER_SHUFFLE || "";
+// Shuffled once, then kept until the number of singers changes; numbers already claimed are skipped either way.
+// Caller holds the script lock.
+function orderShuffle_(size) {
+  var stored = readVariables_(true)[ORDER_SHUFFLE_VARIABLE] || "";
   var list = stored.split(",").map(function (item) { return Number(item.trim()); });
-  if (isOrderShuffle_(list)) return list;
+  if (isOrderShuffle_(list, size)) return list;
   list = [];
-  for (var number = 1; number <= ORDER_SIZE; number++) list.push(number);
+  for (var number = 1; number <= size; number++) list.push(number);
   for (var index = list.length - 1; index > 0; index--) {
     var swap = randomIndex_(index + 1);
     var held = list[index];
     list[index] = list[swap];
     list[swap] = held;
   }
-  setVariables_({ ORDER_SHUFFLE: list.join(",") });
+  var updates = {};
+  updates[ORDER_SHUFFLE_VARIABLE] = list.join(",");
+  setVariables_(updates);
   return list;
 }
 
-// Each signed-in account gets one number; asking again returns the same one.
+// Each singer gets one number; asking again returns the same one. Anyone not on the singer list is turned away.
 function claimOrder_(user, name) {
   name = name.replace(/\s+/g, " ").trim();
   if (!name) throw new Error("Enter your name.");
@@ -793,23 +869,29 @@ function claimOrder_(user, name) {
   lock.waitLock(20000);
   try {
     var entries = readOrder_();
+    var singers = singerEmails_(true);
     var payload;
     if (entries.some(function (entry) { return entry.email === user.email; })) {
-      payload = orderPayload_(user, entries);
+      payload = orderPayload_(user, entries, singers);
       payload.status = "already";
+      return payload;
+    }
+    if (singers.indexOf(user.email) === -1) {
+      payload = orderPayload_(user, entries, singers);
+      payload.status = "notSinger";
       return payload;
     }
     var taken = {};
     entries.forEach(function (entry) { taken[entry.number] = true; });
-    var number = orderShuffle_().filter(function (item) { return !taken[item]; })[0];
+    var number = orderShuffle_(orderSize_(entries, singers)).filter(function (item) { return !taken[item]; })[0];
     if (!number) {
-      payload = orderPayload_(user, entries);
+      payload = orderPayload_(user, entries, singers);
       payload.status = "full";
       return payload;
     }
     var entry = { number: number, name: name, email: user.email, claimedAt: new Date().toISOString() };
     var sheet = orderSheet_();
-    var map = ensureHeaders_(sheet, ORDER_HEADERS, "Singing order");
+    var map = ensureHeaders_(sheet, ORDER_HEADERS, ORDER_SHEET);
     var row = new Array(sheet.getLastColumn()).fill("");
     row[map.number - 1] = String(entry.number);
     row[map.name - 1] = entry.name;
@@ -817,7 +899,7 @@ function claimOrder_(user, name) {
     row[map.claimed_at - 1] = entry.claimedAt;
     // Plain text, so a name like "=SUM(...)" is stored as typed rather than run as a formula.
     sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setNumberFormat("@").setValues([row]);
-    payload = orderPayload_(user, entries.concat([entry]));
+    payload = orderPayload_(user, entries.concat([entry]), singers);
     payload.status = "claimed";
     return payload;
   } finally {
@@ -825,17 +907,19 @@ function claimOrder_(user, name) {
   }
 }
 
-function orderAdminPayload_(entries) {
+function orderAdminPayload_(entries, singers) {
+  var size = orderSize_(entries, singers);
   return {
     ok: true,
-    size: ORDER_SIZE,
+    size: size,
+    singers: singers,
     entries: entries.slice().sort(function (a, b) { return a.number - b.number; }),
-    remaining: ORDER_SIZE - entries.length,
+    remaining: Math.max(0, size - entries.length),
   };
 }
 
 function orderAdmin_() {
-  return orderAdminPayload_(readOrder_());
+  return orderAdminPayload_(readOrder_(), singerEmails_(true));
 }
 
 // Keeps the old claims: the tab is renamed rather than cleared, and the next claim starts a new tab and shuffle.
@@ -846,8 +930,10 @@ function orderReset_() {
     var spreadsheet = spreadsheet_("VARIABLES_SPREADSHEET_ID", "Variables");
     var sheet = spreadsheet.getSheetByName(ORDER_SHEET);
     if (sheet && sheet.getLastRow() > 1) sheet.setName(ORDER_SHEET + " (reset " + resetStamp_() + ")");
-    setVariables_({ ORDER_SHUFFLE: "" });
-    return orderAdminPayload_(readOrder_());
+    var updates = {};
+    updates[ORDER_SHUFFLE_VARIABLE] = "";
+    setVariables_(updates);
+    return orderAdminPayload_(readOrder_(), singerEmails_(true));
   } finally {
     lock.releaseLock();
   }
@@ -929,6 +1015,8 @@ function status_(admin) {
     singerCount: 0,
     voteCount: 0,
     drawCount: 0,
+    finalistCount: 0,
+    lotteryEntrants: 0,
     recentRegistrations: [],
     adViews: [],
     checkin: orDefault_(function () { return windowState_("checkin"); }, unscheduled),
@@ -953,6 +1041,9 @@ function status_(admin) {
   base.singerCount = singers.rows ? singers.rows.length : 0;
   base.voteCount = ballots.rows ? ballots.rows.length : 0;
   base.drawCount = draws.length;
+  var field = orDefault_(lotteryEntrants_, null);
+  base.finalistCount = field ? field.singers : 0;
+  base.lotteryEntrants = field ? field.entrants.length : base.registeredCount;
   base.recentRegistrations = (registrations.rows || []).slice(-5).reverse();
   base.adViews = orDefault_(adViewCounts_, []);
   return base;

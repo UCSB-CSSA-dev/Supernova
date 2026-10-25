@@ -14,7 +14,12 @@ type Destination = { href: string; title: string; description: string; icon: Com
 const AUDIENCE: Destination[] = [
   { href: "/check-in", title: "Check in", description: "Check in while check-in is open.", icon: ScanLine },
   { href: "/vote", title: "Vote", description: "Vote for your favorite performance once voting opens.", icon: Vote },
-  { href: "/random-order", title: "Singing order", description: "Performers: get your random spot in the lineup.", icon: Mic },
+  {
+    href: "/random-order",
+    title: "Singing Order (Finals)",
+    description: "Finalists: get your random spot in the lineup.",
+    icon: Mic,
+  },
 ];
 
 const ADMIN: Destination[] = [
@@ -22,7 +27,7 @@ const ADMIN: Destination[] = [
   { href: "/admin/check-in", title: "Check-in screen", description: "Check-in QR and live count for the projector.", icon: QrCode },
   { href: "/admin/voting-qr", title: "Voting QR", description: "Full-screen QR that opens the ballot.", icon: Vote },
   { href: "/result", title: "Results", description: "Live ranking of the performances for the projector.", icon: BarChart3 },
-  { href: "/admin/lottery", title: "Lucky draw", description: "Draw winners from everyone who checked in.", icon: Gift },
+  { href: "/admin/lottery", title: "Lucky draw", description: "Draw winners from everyone who checked in and the singers.", icon: Gift },
 ];
 
 export function DashboardScreen() {

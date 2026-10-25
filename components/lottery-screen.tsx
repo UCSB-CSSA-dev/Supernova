@@ -130,6 +130,7 @@ export function LotteryScreen() {
               <p className="font-heading text-[clamp(2rem,4.5vw,4.5rem)] leading-none tabular-nums">{state.eligible}</p>
               <p className="mt-1 text-xs tracking-[0.3em] text-muted-foreground uppercase">
                 Still in the draw · {state.registered} checked in
+                {state.singers ? ` · ${state.singers} singers` : ""}
               </p>
             </div>
           ) : null}
@@ -196,10 +197,10 @@ export function LotteryScreen() {
             </Button>
             <p className="mt-3 text-xs text-muted-foreground">
               {state && state.eligible === 0 && !rolling
-                ? state.registered === 0
-                  ? "Nobody has checked in yet."
-                  : "Everyone who checked in has been drawn."
-                : "Press space to draw. Each person can only win once."}
+                ? state.registered + (state.singers ?? 0) === 0
+                  ? "Nobody is in the draw yet."
+                  : "Everyone in the draw has been drawn."
+                : "Press space to draw. Each person can only win once. Winners claim their prize right after the show."}
             </p>
             {!state && !error ? <p className="mt-4 text-muted-foreground">Loading the lottery…</p> : null}
             {error ? <p className="mt-4 text-destructive">{error}</p> : null}

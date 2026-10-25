@@ -217,6 +217,11 @@ export function fetchOrderAdmin(): Promise<OrderAdminState> {
   return call({ action: "orderAdmin", session: adminSession() }, { retries: 1 });
 }
 
+// Replaces the whole singer list; safe to repeat.
+export function setSingers(emails: string[]): Promise<OrderAdminState> {
+  return call({ action: "setSingers", session: adminSession(), emails }, { retries: 1 });
+}
+
 // Never retried: a repeated request could archive claims made right after the first reset.
 export function resetOrder(): Promise<OrderAdminState> {
   return call({ action: "orderReset", session: adminSession() }, { timeoutMs: 30000 });

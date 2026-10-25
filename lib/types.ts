@@ -29,13 +29,16 @@ export type Me = {
   name: string;
   registered: boolean;
   registeredAt: string | null;
+  // On the singer list: can't check in, but always in the lucky draw.
+  singer?: boolean;
   checkin: TimeWindow;
   voting: TimeWindow;
 };
 
 export type RegisterResult =
   | { status: "registered"; registeredAt: string; already: boolean; voting: TimeWindow }
-  | { status: "closed"; window: TimeWindow };
+  | { status: "closed"; window: TimeWindow }
+  | { status: "singer" };
 
 export type NotOpen = {
   status: "notOpen";
@@ -73,6 +76,8 @@ export type LotteryDraw = {
 export type LotteryState = {
   draws: LotteryDraw[];
   registered: number;
+  // Singers are in the draw without checking in.
+  singers?: number;
   eligible: number;
   names: string[];
   winner?: LotteryDraw;
@@ -85,6 +90,8 @@ export type OrderSlot = {
 
 export type OrderState = {
   size: number;
+  // Whether this account is on the singer list, the only people who can claim a number.
+  allowed: boolean;
   mine: (OrderSlot & { claimedAt: string }) | null;
   lineup: OrderSlot[];
   remaining: number;
@@ -97,12 +104,13 @@ export type OrderEntry = OrderSlot & {
 
 export type OrderAdminState = {
   size: number;
+  singers: string[];
   entries: OrderEntry[];
   remaining: number;
 };
 
 export type OrderClaim = OrderState & {
-  status: "claimed" | "already" | "full";
+  status: "claimed" | "already" | "full" | "notSinger";
 };
 
 export type SheetStatus = {
@@ -139,6 +147,9 @@ export type AdminStatus = {
   singerCount: number;
   voteCount: number;
   drawCount: number;
+  finalistCount?: number;
+  // Everyone in the lucky draw: check-ins plus singers, once each.
+  lotteryEntrants?: number;
   recentRegistrations: Registration[];
   adViews: AdViewCount[];
   checkin: TimeWindow;

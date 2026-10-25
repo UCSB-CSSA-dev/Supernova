@@ -261,9 +261,10 @@ export function AdminDashboard() {
             <CardHeader>
               <CardTitle>3. Lucky draw</CardTitle>
               <CardDescription>
-                Draws one checked-in person at a time. Nobody can be drawn twice, and every draw is saved to the
-                Lottery tab. {status.drawCount} drawn so far, {Math.max(0, status.registeredCount - status.drawCount)}{" "}
-                left in the draw.
+                Draws one person at a time from everyone who checked in plus the {status.finalistCount ?? 0} singers on
+                the singer list (singers can&apos;t check in). Nobody can be drawn twice, and every draw is saved to the
+                Lottery tab. Winners claim their prize right after the show. {status.drawCount} drawn so far,{" "}
+                {Math.max(0, (status.lotteryEntrants ?? status.registeredCount) - status.drawCount)} left in the draw.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
@@ -275,11 +276,12 @@ export function AdminDashboard() {
                 title="Reset the lucky draw?"
                 description={
                   <>
-                    All {status.drawCount} winners are cleared and everyone who checked in is back in the draw. The
+                    All {status.drawCount} winners are cleared and everyone who checked in, plus the singers, is back in
+                    the draw. The
                     current winners are kept in the Registrations spreadsheet as a renamed Lottery tab.
                   </>
                 }
-                success="Lucky draw reset. Everyone who checked in can be drawn again."
+                success="Lucky draw reset. Everyone in the draw can be drawn again."
                 disabled={setupBlocked || status.drawCount === 0}
                 onReset={async () => {
                   await resetLottery();

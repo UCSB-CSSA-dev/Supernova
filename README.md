@@ -9,16 +9,16 @@ The audience checks in at the venue, votes later in the show, and is entered in 
 | `/login` | Everyone. Google sign-in, then back to the page you were trying to open |
 | `/check-in` | Signed in. Opening it while check-in is open checks you in |
 | `/vote` | Signed in. Only people who checked in can actually vote |
-| `/random-order` | Signed in. Performers enter their name and get a unique random singing number from 1 to 20 |
+| `/random-order` | Signed in. **Singing Order (Finals)**: singers on the singer list enter their name and get a unique random singing number from 1 to the number of singers. Everyone else is told only finalists can pick |
 | `/dashboard` | Signed in. Links to every page; admin links appear for admins |
 | `/admin`, `/admin/check-in`, `/admin/voting-qr`, `/admin/lottery` | Admins only |
 | `/result` | Admins only. Live ranking for the projector, with a "Scan to vote" QR in the bottom-right until voting closes. Kept off audience phones so hundreds of people refreshing it can't overload Apps Script |
 
 `/` sends signed-out visitors to `/login` and signed-in people to `/dashboard`. Signed-out visitors who open any other page are sent to `/login`. The site is static, so this blocking only affects what the browser shows. The real rules (who can check in, vote, or use admin actions) are enforced by Apps Script on every request.
 
-1. **Check in.** While check-in is open, anyone who opens `/check-in` and signs in with a @ucsb.edu Google account is recorded in the Registrations sheet. `/admin/check-in` shows a QR code for that page on the projector. People who open the page before check-in opens are checked in automatically once it opens. The link works from anywhere, so check-in is limited by time, not by being in the room.
+1. **Check in.** While check-in is open, anyone who opens `/check-in` and signs in with a @ucsb.edu Google account is recorded in the Registrations sheet and told they're qualified for the lucky draw, and that winners must claim their prize right after the show. Singers on the singer list can't check in; the page tells them they're in the lucky draw anyway. `/admin/check-in` shows a QR code for that page on the projector. People who open the page before check-in opens are checked in automatically once it opens. The link works from anywhere, so check-in is limited by time, not by being in the room.
 2. **Vote.** `/vote` (or the QR on `/admin/voting-qr`) is the same for everyone. Only people who checked in can vote, once each, and only while voting is open. People who arrive before voting opens see a waiting screen that turns into the ballot when voting opens.
-3. **Lucky draw.** `/admin/lottery` draws one checked-in person at a time. Nobody can win twice. Every draw is saved to a `Lottery` tab in the Registrations spreadsheet.
+3. **Lucky draw.** `/admin/lottery` draws one person at a time from everyone who checked in plus every singer on the singer list. Nobody can win twice. Every draw is saved to a `Lottery` tab in the Registrations spreadsheet.
 
 GitHub Pages serves only the static site. Google Apps Script is the backend: it verifies Google sign-ins, and reads and writes the spreadsheets as the Google account that owns the script. Nothing sends email.
 
@@ -71,9 +71,11 @@ Create four files on the same Google account:
   | `CHECKIN_OPENS_AT`, `CHECKIN_CLOSES_AT` | Check-in window (ISO times) |
   | `VOTING_OPENS_AT`, `VOTING_CLOSES_AT` | Voting window (ISO times) |
   | `ADMIN_EMAILS` | Trusted admin emails, comma-separated |
-  | `ORDER_SHUFFLE` | The shuffled numbers 1–20 for `/random-order`, created on the first claim |
+  | `SINGER_EMAILS` | The singer (finalist) list, comma-separated. Set it from **4. Singing Order (Finals)** on `/admin` |
+  | `FINALS_ORDER_SHUFFLE` | The shuffled numbers 1–(number of singers) for `/random-order`, created on the first claim |
+  | `ORDER_SHUFFLE` | The semifinal shuffle. No longer used |
 
-  `/random-order` saves claims (`number`, `name`, `email`, `claimed_at`) to a `Singing order` tab it adds to this spreadsheet. Each account gets the next unclaimed number from `ORDER_SHUFFLE`. Admins see the full list (with emails) under **4. Singing order** on `/admin`. **Reset** renames the tab to `Singing order (reset <time>)` so the old list is kept, and clears `ORDER_SHUFFLE`. The next claim then starts a new tab and a new shuffle.
+  `/random-order` saves claims (`number`, `name`, `email`, `claimed_at`) to a `Singing Order (Finals)` tab it adds to this spreadsheet; the semifinal `Singing order` tab is left as it was. Only emails in `SINGER_EMAILS` can claim, and each gets the next unclaimed number from `FINALS_ORDER_SHUFFLE`. If the number of singers changes, the next claim reshuffles the numbers still open; numbers already claimed never change. The singer list also decides who can't check in (singers) and adds every singer to the lucky draw, under the name they typed when picking a number, or their email otherwise. Admins paste the list and see every claim (with emails) under **4. Singing Order (Finals)** on `/admin`. **Reset** renames the tab to `Singing Order (Finals) (reset <time>)` so the old list is kept, and clears `FINALS_ORDER_SHUFFLE`. The next claim then starts a new tab and a new shuffle.
 
   Sponsor ad views are counted on an `Ad views` tab (`viewed_at`, `ads`, `email`) it adds here. Each time an ad is shown the browser queues it and sends it along with its next request, so counting adds almost no traffic. **Sponsor ad views** at the bottom of `/admin` shows views and distinct signed-in viewers per ad. The ad ids (`welcome`, `checkin`, `poster`, `logo`) are set in `components/ad-slot.tsx` and must match `AD_IDS` in `Code.gs`. Ads are cropped to fill their frame (4:3 for `welcome`, 4:5 for `checkin` and `poster`), so supply sponsor ads at that shape to show them uncropped. Delete the tab's rows to start counting from zero.
 
@@ -101,7 +103,8 @@ npm run dev
 1. Open `/admin` and sign in with Google as the owner or a trusted admin. The owner can add other organizers under **Admins**.
 2. **Check-in:** set the opening and closing times, or press **Open now** when doors open. Put **Open check-in screen** on a projector or TV. The latest check-ins appear on the dashboard (press Refresh).
 3. **Voting:** set an opening time, or press **Open in 2 min** when it's almost time (announce it on the mic). Use **Open now** only if few people are waiting. Show **Full-screen QR** or share the link. Open `/result` on the main projector; its corner QR also opens the ballot.
-4. **Lucky draw:** open the lottery screen and press **Draw** (or space) once per prize.
+4. **Singing order:** before the show, paste the singers' @ucsb.edu emails into **4. Singing Order (Finals)** on `/admin` and press **Save singer list**, then send the singers the `/random-order` link.
+5. **Lucky draw:** open the lottery screen and press **Draw** (or space) once per prize. Winners claim their prize right after the show.
 
 A sign-in lasts 12 hours and is shared across tabs, so the check-in screen, lottery, and dashboard can run side by side. Admin access is checked on every request, so removing someone from the list locks them out right away.
 

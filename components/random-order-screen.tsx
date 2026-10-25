@@ -17,6 +17,8 @@ import { cn } from "@/lib/utils";
 const MIN_SPIN_MS = 1800;
 // Matches ORDER_NAME_MAX in Code.gs.
 const NAME_MAX = 40;
+const NOT_SINGER =
+  "Only finalists can pick a singing order. If you're performing, sign in with the @ucsb.edu email you gave the organizers, or ask them to add you.";
 
 export function RandomOrderScreen() {
   return <AuthGate>{(session) => <RandomOrder key={session.token} session={session} />}</AuthGate>;
@@ -99,6 +101,7 @@ function RandomOrder({ session }: { session: UserSession }) {
       if (!mounted.current) return;
       setOrder(body);
       if (body.status === "full") setError(`All ${body.size} spots are taken.`);
+      if (body.status === "notSinger") setError(NOT_SINGER);
       setJustClaimed(body.status === "claimed");
     } catch (caught) {
       if (mounted.current) setError(caught instanceof Error ? caught.message : "Could not get a number. Try again.");
@@ -114,7 +117,7 @@ function RandomOrder({ session }: { session: UserSession }) {
 
   return (
     <MotionConfig reducedMotion="user">
-      <PageShell title="Singing order" className="max-w-2xl">
+      <PageShell title="Singing Order (Finals)" className="max-w-2xl">
         <SignedInAs session={session} />
 
         {loadError ? <p className="mt-6 text-destructive">{loadError}</p> : null}
@@ -146,6 +149,11 @@ function RandomOrder({ session }: { session: UserSession }) {
                   <p className="mt-3 font-heading text-[clamp(5rem,22vw,9rem)] leading-none font-bold text-foreground/80 tabular-nums">
                     {reel ?? "?"}
                   </p>
+                </motion.div>
+              ) : !order.allowed ? (
+                <motion.div key="not-singer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
+                  <Mic className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+                  <p className="text-muted-foreground">{NOT_SINGER}</p>
                 </motion.div>
               ) : order.remaining === 0 ? (
                 <motion.p key="full" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center">
@@ -189,7 +197,7 @@ function RandomOrder({ session }: { session: UserSession }) {
           </section>
         ) : null}
 
-        {order ? (
+        {order && order.size > 0 ? (
           <section className="mt-8">
             <div className="flex items-center justify-between">
               <h2 className="text-sm tracking-[0.3em] text-primary uppercase">Lineup</h2>

@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { preload } from "react-dom";
 import { motion } from "motion/react";
-import { Clock } from "lucide-react";
+import { Clock, Mic } from "lucide-react";
 import { ADS, AdPoster } from "@/components/ad-slot";
 import { AuthGate } from "@/components/auth-gate";
 import { SignedInAs } from "@/components/google-sign-in";
@@ -26,6 +26,7 @@ type Phase =
   | { status: "loading" }
   | { status: "closed"; window: TimeWindow }
   | { status: "registered"; registeredAt: string; already: boolean }
+  | { status: "singer" }
   | { status: "error"; message: string };
 
 export function CheckinPage() {
@@ -56,11 +57,11 @@ function RegisterScreen({ session }: { session: UserSession }) {
     async function run(minMs: number) {
       const result = await registerAtLeast(token, minMs);
       if (!active) return;
-      if (result.status !== "registered" && result.status !== "closed") {
+      if (result.status !== "registered" && result.status !== "closed" && result.status !== "singer") {
         throw new Error("Check-in isn't available right now. Ask an admin to redeploy the Apps Script.");
       }
       setPhase(result);
-      if (result.status === "registered") return;
+      if (result.status !== "closed") return;
       const opensAt = result.window.phase === "scheduled" && result.window.opensAt ? Date.parse(result.window.opensAt) : NaN;
       if (Number.isNaN(opensAt)) return;
       const wait = Math.min(Math.max(opensAt - Date.now(), 0), MAX_WAIT_MS) + Math.random() * JITTER_MS;
@@ -104,8 +105,7 @@ function RegisterScreen({ session }: { session: UserSession }) {
                 animate={{ opacity: 1, height: "auto" }}
                 className="mt-1 text-xs text-muted-foreground"
               >
-                You&apos;re in the lucky draw. Voting opens later in the show. Scan the voting code or open the link when
-                it&apos;s announced.
+                You&apos;re qualified for the lucky draw. If you win, you need to claim your prize right after the show.
               </motion.p>
             </>
           )}
@@ -128,6 +128,16 @@ function RegisterScreen({ session }: { session: UserSession }) {
             </Button>
           </div>
         </>
+      ) : null}
+
+      {phase.status === "singer" ? (
+        <Notice icon={<Mic className="size-6 text-primary" />}>
+          <p className="text-lg">Singers can&apos;t check in, but you&apos;re in the lucky draw.</p>
+          <p className="mt-1 text-muted-foreground">
+            You&apos;re on the singer list, so you&apos;re entered automatically. If you win, claim your prize right after
+            the show.
+          </p>
+        </Notice>
       ) : null}
 
       {phase.status === "closed" ? (
