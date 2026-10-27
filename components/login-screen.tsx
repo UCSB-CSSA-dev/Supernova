@@ -27,7 +27,7 @@ export function LoginScreen() {
       {session ? (
         <p className="mt-8 text-muted-foreground">Signed in as {session.email}. Taking you there…</p>
       ) : (
-        <GoogleSignIn prompt="Sign in with your UCSB Google account to check in, vote, and enter the lucky draw." />
+        <GoogleSignIn prompt="Sign in with your UCSB Google account to check in and enter the lucky draw." />
       )}
       <AdPoster ad="welcome" className="mt-10" />
     </PageShell>
