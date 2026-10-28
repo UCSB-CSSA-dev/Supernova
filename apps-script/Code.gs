@@ -21,6 +21,9 @@ var AD_IDS = ["welcome", "checkin", "poster", "logo"];
 var AD_VIEWS_SHEET = "Ad views";
 var AD_VIEW_HEADERS = ["viewed_at", "ads", "email"];
 var AD_VIEWS_MAX = 20;
+// Award winners for /final-result, set from /admin and stored as variables.
+var FINAL_AWARDS = { gold: "FINAL_GOLD", silver: "FINAL_SILVER", bronze: "FINAL_BRONZE", popular: "FINAL_POPULAR" };
+var FINAL_NAME_MAX = 80;
 var SESSION_MS = 12 * 60 * 60 * 1000;
 var WINDOWS = { checkin: "CHECKIN", voting: "VOTING" };
 var REQUIRED_PROPS = [
@@ -77,6 +80,8 @@ function handle_(data) {
     if (action === "orderAdmin") return orderAdmin_();
     if (action === "orderReset") return orderReset_();
     if (action === "setSingers") return setSingers_(data.emails);
+    if (action === "finalResult") return finalResult_();
+    if (action === "setFinalResult") return setFinalResult_(data.awards);
     return { ok: false, error: "Unknown action." };
   } catch (error) {
     return {
@@ -937,6 +942,34 @@ function orderReset_() {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ---------- Final result ----------
+
+function finalResult_(fresh) {
+  var variables = readVariables_(fresh);
+  var awards = {};
+  Object.keys(FINAL_AWARDS).forEach(function (award) { awards[award] = variables[FINAL_AWARDS[award]] || ""; });
+  return { ok: true, awards: awards };
+}
+
+// Replaces all four names; a blank name clears that award.
+function setFinalResult_(raw) {
+  raw = raw || {};
+  var updates = {};
+  Object.keys(FINAL_AWARDS).forEach(function (award) {
+    var name = String(raw[award] || "").replace(/\s+/g, " ").trim();
+    if (name.length > FINAL_NAME_MAX) throw new Error("Keep each name to " + FINAL_NAME_MAX + " characters.");
+    updates[FINAL_AWARDS[award]] = name;
+  });
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    setVariables_(updates);
+  } finally {
+    lock.releaseLock();
+  }
+  return finalResult_(true);
 }
 
 // ---------- Sponsor ads ----------

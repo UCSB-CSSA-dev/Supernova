@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ComponentType } from "react";
 import Link from "next/link";
-import { BarChart3, Gift, Mic, QrCode, ScanLine, Settings, Vote } from "lucide-react";
+import { BarChart3, Gift, Mic, QrCode, ScanLine, Settings, Trophy, Vote } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
 import { SignedInAs } from "@/components/google-sign-in";
 import { PageShell } from "@/components/page-shell";
@@ -28,6 +28,7 @@ const ADMIN: Destination[] = [
   { href: "/admin/voting-qr", title: "Voting QR", description: "Full-screen QR that opens the ballot.", icon: Vote },
   { href: "/result", title: "Results", description: "Live ranking of the performances for the projector.", icon: BarChart3 },
   { href: "/admin/lottery", title: "Lucky draw", description: "Draw winners from everyone who checked in and the singers.", icon: Gift },
+  { href: "/final-result", title: "Final result", description: "Podium reveal of the winners for the projector.", icon: Trophy },
 ];
 
 export function DashboardScreen() {

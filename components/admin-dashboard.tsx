@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ADS, type AdId } from "@/components/ad-slot";
 import { WindowControl } from "@/components/window-control";
 import { AdminList } from "@/components/admin-list";
+import { FinalResultAdmin } from "@/components/final-result-admin";
 import { OrderAdmin } from "@/components/order-admin";
 import { ResetButton } from "@/components/reset-button";
 import { fetchAdminStatus, resetCheckin, resetLottery, resetVotes, signOut } from "@/lib/backend";
@@ -292,6 +293,8 @@ export function AdminDashboard() {
           </Card>
 
           <OrderAdmin disabled={setupBlocked} />
+
+          <FinalResultAdmin disabled={setupBlocked} />
 
           <AdminList
             admins={status.admins}

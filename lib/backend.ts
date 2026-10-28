@@ -5,6 +5,8 @@ import type {
   AdminList,
   AdminStatus,
   CheckinStatus,
+  FinalAwards,
+  FinalResult,
   LotteryState,
   Me,
   OrderAdminState,
@@ -225,6 +227,15 @@ export function setSingers(emails: string[]): Promise<OrderAdminState> {
 // Never retried: a repeated request could archive claims made right after the first reset.
 export function resetOrder(): Promise<OrderAdminState> {
   return call({ action: "orderReset", session: adminSession() }, { timeoutMs: 30000 });
+}
+
+export function fetchFinalResult(): Promise<FinalResult> {
+  return call({ action: "finalResult", session: adminSession() }, { timeoutMs: 10000, retries: 1 });
+}
+
+// Replaces all four names; safe to repeat.
+export function setFinalResult(awards: FinalAwards): Promise<FinalResult> {
+  return call({ action: "setFinalResult", session: adminSession(), awards }, { retries: 1 });
 }
 
 // Never retried: a repeated request could archive check-ins made right after the first reset.

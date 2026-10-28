@@ -83,6 +83,14 @@ export type LotteryState = {
   winner?: LotteryDraw;
 };
 
+export type FinalAward = "gold" | "silver" | "bronze" | "popular";
+
+export type FinalAwards = Record<FinalAward, string>;
+
+export type FinalResult = {
+  awards: FinalAwards;
+};
+
 export type OrderSlot = {
   number: number;
   name: string;
