@@ -12,9 +12,9 @@ import { cn } from "@/lib/utils";
 // Placeholders until sponsor ads replace them. The keys are the ad ids counted by AD_IDS in Code.gs.
 // Images are cropped to fill their frame, so supply sponsor ads at the frame's shape to show them uncropped.
 export const ADS = {
-  welcome: { src: welcomeAd, alt: "UCSB Henley Gate", placement: "Sign-in page and check-in start", frame: "aspect-[4/3]" },
-  checkin: { src: checkinAd, alt: "UCSB classroom building", placement: "While checking in and after", frame: "aspect-[4/5]" },
-  poster: { src: poster, alt: "2026 UCSB CSSA Supernova poster", placement: "While submitting a vote and after", frame: "aspect-[4/5]" },
+  welcome: { src: welcomeAd, alt: "SM横版", placement: "Sign-in page and check-in start", frame: "aspect-[4/3]" },
+  checkin: { src: checkinAd, alt: "UCSB CSSA竖版", placement: "While checking in and after", frame: "aspect-[4/5]" },
+  poster: { src: poster, alt: "SM竖版", placement: "While submitting a vote and after", frame: "aspect-[4/5]" },
   logo: { src: logo, alt: "UCSB CSSA logo", placement: "Vote confirmation dialog", frame: "" },
 } satisfies Record<string, { src: StaticImageData; alt: string; placement: string; frame: string }>;
 
