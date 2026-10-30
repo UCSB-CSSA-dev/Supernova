@@ -53,7 +53,8 @@ export function AdPoster({ ad = "poster", className }: { ad?: Exclude<AdId, "log
         src={ADS[ad].src}
         alt={ADS[ad].alt}
         sizes="(max-width: 512px) 100vw, 512px"
-        className={cn("h-auto w-full rounded-xl object-cover ring-1 ring-foreground/10", ADS[ad].frame)}
+        // className={cn("h-auto w-full rounded-xl object-cover ring-1 ring-foreground/10", ADS[ad].frame)}
+        className="h-auto w-full rounded-xl object-cover ring-1 ring-foreground/10"
         priority
       />
     </aside>
